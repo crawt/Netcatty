@@ -66,6 +66,10 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.name == 'macos' && 'false' || '' }}
           ELECTRON_BUILDER_PUBLISH: "never"
+          # On ARM64 runners, electron-builder's post-build @electron/rebuild incorrectly
+          # tries to restore native modules to x64, but the ARM g++ doesn't support -m64.
+          # Setting npm_config_arch ensures node-gyp uses the correct host architecture.
+          npm_config_arch: ${{ matrix.name == 'linux-arm64' && 'arm64' || '' }}
         run: npm run ${{ matrix.pack_script }}
 
       - name: Upload artifacts
