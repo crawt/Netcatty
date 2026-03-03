@@ -57,6 +57,7 @@ interface UseSftpModalSessionResult {
   loading: boolean;
   setLoading: (loading: boolean) => void;
   reconnecting: boolean;
+  sessionVersion: number;
   ensureSftp: () => Promise<string>;
   loadFiles: (path: string, options?: { force?: boolean }) => Promise<void>;
   closeSftpSession: () => Promise<void>;
@@ -81,7 +82,9 @@ export const useSftpModalSession = ({
   const [files, setFiles] = useState<RemoteFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [sessionVersion, setSessionVersion] = useState(0);
   const sftpIdRef = useRef<string | null>(null);
+  const closingPromiseRef = useRef<Promise<void> | null>(null);
   const initializedRef = useRef(false);
   const lastInitialPathRef = useRef<string | undefined>(undefined);
   const localHomeRef = useRef<string | null>(null);
@@ -95,9 +98,15 @@ export const useSftpModalSession = ({
     Map<string, { files: RemoteFile[]; timestamp: number }>
   >(new Map());
   const loadSeqRef = useRef(0);
+  const bumpSessionVersion = useCallback(() => {
+    setSessionVersion((prev) => prev + 1);
+  }, []);
 
   const ensureSftp = useCallback(async () => {
     if (isLocalSession) throw new Error("Local session does not use SFTP");
+    if (closingPromiseRef.current) {
+      await closingPromiseRef.current;
+    }
     if (sftpIdRef.current) return sftpIdRef.current;
     const sftpId = await openSftp({
       sessionId: `sftp-modal-${host.id}`,
@@ -116,7 +125,10 @@ export const useSftpModalSession = ({
       sudo: credentials.sftpSudo,
       legacyAlgorithms: credentials.legacyAlgorithms,
     });
-    sftpIdRef.current = sftpId;
+    if (sftpIdRef.current !== sftpId) {
+      sftpIdRef.current = sftpId;
+      bumpSessionVersion();
+    }
     return sftpId;
   }, [
     isLocalSession,
@@ -135,19 +147,45 @@ export const useSftpModalSession = ({
     credentials.jumpHosts,
     credentials.sftpSudo,
     credentials.legacyAlgorithms,
+    bumpSessionVersion,
     openSftp,
   ]);
 
   const closeSftpSession = useCallback(async () => {
-    if (!isLocalSession && sftpIdRef.current) {
+    if (isLocalSession) {
+      if (sftpIdRef.current !== null) {
+        sftpIdRef.current = null;
+        bumpSessionVersion();
+      }
+      return;
+    }
+
+    // Clear ref before awaiting backend close to avoid handing out a stale ID
+    // if the modal is reopened while close is still in flight.
+    const sftpIdToClose = sftpIdRef.current;
+    if (sftpIdToClose !== null) {
+      sftpIdRef.current = null;
+      bumpSessionVersion();
+    }
+    if (!sftpIdToClose) {
+      return;
+    }
+
+    const currentClosePromise = (async () => {
       try {
-        await closeSftp(sftpIdRef.current);
+        await closeSftp(sftpIdToClose);
       } catch {
         // Silently ignore close errors - connection may already be closed
+      } finally {
+        if (closingPromiseRef.current === currentClosePromise) {
+          closingPromiseRef.current = null;
+        }
       }
-    }
-    sftpIdRef.current = null;
-  }, [closeSftp, isLocalSession]);
+    })();
+
+    closingPromiseRef.current = currentClosePromise;
+    await currentClosePromise;
+  }, [bumpSessionVersion, closeSftp, isLocalSession]);
 
   const isSessionError = useCallback((err: unknown): boolean => {
     if (!(err instanceof Error)) return false;
@@ -173,14 +211,7 @@ export const useSftpModalSession = ({
     while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
       try {
         reconnectAttemptsRef.current += 1;
-        if (sftpIdRef.current) {
-          try {
-            await closeSftp(sftpIdRef.current);
-          } catch {
-            // ignore
-          }
-          sftpIdRef.current = null;
-        }
+        await closeSftpSession();
         await ensureSftp();
         reconnectingRef.current = false;
         setReconnecting(false);
@@ -199,7 +230,7 @@ export const useSftpModalSession = ({
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
-  }, [closeSftp, ensureSftp, t]);
+  }, [closeSftpSession, ensureSftp, t]);
 
   const loadFiles = useCallback(
     async (path: string, options?: { force?: boolean }) => {
@@ -355,7 +386,6 @@ export const useSftpModalSession = ({
       void loadFiles(currentPath);
     } else {
       loadSeqRef.current += 1;
-      void closeSftpSession();
       initializedRef.current = false;
     }
   }, [
@@ -388,6 +418,7 @@ export const useSftpModalSession = ({
     loading,
     setLoading,
     reconnecting,
+    sessionVersion,
     ensureSftp,
     loadFiles,
     closeSftpSession,
