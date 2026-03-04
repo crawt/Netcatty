@@ -322,6 +322,7 @@ const ensureRemoteDirForSession = async (sftpId, dirPath, requestedEncoding) => 
 
   const encoding = resolveEncodingForRequest(sftpId, requestedEncoding);
   if (encoding === "utf-8") {
+    await requireSftpChannel(client);
     const encodedPath = encodePath(dirPath, encoding);
     await client.mkdir(encodedPath, true);
     return true;
