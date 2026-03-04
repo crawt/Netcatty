@@ -436,7 +436,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
     t,
     onSessionAttached: (id: string) => {
       // Sync terminal encoding to SSH backend before first data arrives
-      const isSSH = host.protocol !== 'local' && host.protocol !== 'serial' && host.protocol !== 'telnet' && host.protocol !== 'mosh' && !host.moshEnabled && !host.id?.startsWith('local-') && !host.id?.startsWith('serial-');
+      const isSSH = host.protocol !== 'local' && host.protocol !== 'serial' && host.protocol !== 'telnet' && host.protocol !== 'mosh' && !host.moshEnabled && !host.id?.startsWith('local-') && !host.id?.startsWith('serial-') && host.hostname !== 'localhost';
       if (isSSH) {
         setSessionEncoding(id, terminalEncodingRef.current);
       }
