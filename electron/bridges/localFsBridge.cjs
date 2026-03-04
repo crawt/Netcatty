@@ -55,10 +55,10 @@ async function listLocalDir(event, payload) {
         const fullPath = path.join(dirPath, entry.name);
         // fs.promises.stat follows symlinks, so we get the target's stats
         const stat = await fs.promises.stat(fullPath);
-        
+
         let type;
         let linkTarget = null;
-        
+
         if (entry.isSymbolicLink()) {
           // This is a symlink - mark it as such and record the target type
           type = "symlink";
@@ -69,10 +69,10 @@ async function listLocalDir(event, payload) {
         } else {
           type = "file";
         }
-        
+
         // Check for Windows hidden attribute
         const hidden = isWindows ? await isWindowsHiddenFile(fullPath) : false;
-        
+
         result[i] = {
           name: entry.name,
           type,
@@ -161,6 +161,17 @@ async function renameLocalFile(event, payload) {
  * Create a local directory
  */
 async function mkdirLocal(event, payload) {
+  // If a file (not directory) exists at this path, remove it first.
+  // This can happen when Electron's showSaveDialog "Replace" action
+  // replaces an existing folder with an empty file.
+  try {
+    const stat = await fs.promises.stat(payload.path);
+    if (!stat.isDirectory()) {
+      await fs.promises.unlink(payload.path);
+    }
+  } catch {
+    // Path doesn't exist, which is fine
+  }
   await fs.promises.mkdir(payload.path, { recursive: true });
   return true;
 }
@@ -201,7 +212,7 @@ async function getSystemInfo() {
 async function readKnownHosts() {
   const homeDir = os.homedir();
   const knownHostsPaths = [];
-  
+
   if (process.platform === "win32") {
     knownHostsPaths.push(path.join(homeDir, ".ssh", "known_hosts"));
     knownHostsPaths.push(path.join(process.env.PROGRAMDATA || "C:\\ProgramData", "ssh", "known_hosts"));
@@ -212,9 +223,9 @@ async function readKnownHosts() {
     knownHostsPaths.push(path.join(homeDir, ".ssh", "known_hosts"));
     knownHostsPaths.push("/etc/ssh/ssh_known_hosts");
   }
-  
+
   let combinedContent = "";
-  
+
   for (const knownHostsPath of knownHostsPaths) {
     try {
       if (fs.existsSync(knownHostsPath)) {
@@ -227,7 +238,7 @@ async function readKnownHosts() {
       console.warn(`Failed to read known_hosts from ${knownHostsPath}:`, err.message);
     }
   }
-  
+
   return combinedContent || null;
 }
 

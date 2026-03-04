@@ -40,6 +40,7 @@ interface UseSftpModalTransfersParams {
   loadFiles: (path: string, options?: { force?: boolean }) => Promise<void>;
   readLocalFile: (path: string) => Promise<ArrayBuffer>;
   readSftp: (sftpId: string, path: string) => Promise<string>;
+  listSftp?: (sftpId: string, path: string) => Promise<RemoteFile[]>;
   writeLocalFile: (path: string, data: ArrayBuffer) => Promise<void>;
   writeSftpBinaryWithProgress: (
     sftpId: string,
@@ -113,6 +114,7 @@ export const useSftpModalTransfers = ({
   setLoading,
   t,
   useCompressedUpload = false,
+  listSftp,
 }: UseSftpModalTransfersParams): UseSftpModalTransfersResult => {
   const [uploading, setUploading] = useState(false);
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
@@ -157,7 +159,7 @@ export const useSftpModalTransfers = ({
             onComplete || (() => { }),
             onError || (() => { })
           );
-          
+
           // Check if this transfer was cancelled
           const wasCancelled = cancelledTransferIdsRef.current.has(taskId);
           if (wasCancelled) {
@@ -320,8 +322,8 @@ export const useSftpModalTransfers = ({
           const [folderName, phase] = newName.split('|');
           const phaseLabel = phase === 'compressing' ? t('sftp.upload.phase.compressing')
             : phase === 'extracting' ? t('sftp.upload.phase.extracting')
-            : phase === 'uploading' ? t('sftp.upload.phase.uploading')
-            : t('sftp.upload.phase.compressed');
+              : phase === 'uploading' ? t('sftp.upload.phase.uploading')
+                : t('sftp.upload.phase.compressed');
           displayName = `${folderName} (${phaseLabel})`;
         }
         setUploadTasks(prev =>
@@ -410,9 +412,161 @@ export const useSftpModalTransfers = ({
           return;
         }
 
-        // For remote SFTP files, use streaming download with save dialog
+        // For remote SFTP files/directories, use streaming download with save dialog
         if (!showSaveDialog || !startStreamTransfer) {
           toast.error(t("sftp.error.downloadFailed"), "SFTP");
+          return;
+        }
+
+        // Check if this is a directory download
+        const isDirectory = file.type === 'directory' || (file.type === 'symlink' && file.linkTarget === 'directory');
+
+        if (isDirectory) {
+          // For directories, download recursively
+          if (!listSftp) {
+            toast.error(t("sftp.error.downloadFailed"), "SFTP");
+            return;
+          }
+
+          // Show save dialog to get target path (the saved "file" becomes the folder path)
+          const targetPath = await showSaveDialog(file.name);
+          if (!targetPath) return;
+
+          const sftpId = await ensureSftp();
+          const transferId = `download-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+          // Create download task for progress display
+          const downloadTask: TransferTask = {
+            id: transferId,
+            fileName: file.name,
+            status: "downloading",
+            progress: 0,
+            totalBytes: 0,
+            transferredBytes: 0,
+            speed: 0,
+            startTime: Date.now(),
+            direction: "download",
+            isDirectory: true,
+          };
+          setUploadTasks(prev => [...prev, downloadTask]);
+
+          try {
+            // Create target directory
+            try {
+              await createUploadBridge.mkdirLocal(targetPath);
+            } catch {
+              // Directory may already exist, continue regardless
+            }
+
+            // Recursively download directory contents
+            let completedBytes = 0;
+
+            const downloadDir = async (remotePath: string, localPath: string): Promise<void> => {
+              const entries = await listSftp(sftpId, remotePath);
+
+              for (const entry of entries) {
+                if (entry.name === '..' || entry.name === '.') continue;
+
+                const remoteEntryPath = joinPath(remotePath, entry.name);
+                const localEntryPath = `${localPath}/${entry.name}`;
+
+                if (entry.type === 'directory') {
+                  try {
+                    await createUploadBridge.mkdirLocal(localEntryPath);
+                  } catch {
+                    // Directory may already exist, continue regardless
+                  }
+                  await downloadDir(remoteEntryPath, localEntryPath);
+                } else {
+                  // Download individual file
+                  const childTransferId = `download-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                  const entrySize = typeof entry.size === 'number' ? entry.size : parseInt(String(entry.size), 10) || 0;
+
+                  await new Promise<void>((resolve, reject) => {
+                    startStreamTransfer(
+                      {
+                        transferId: childTransferId,
+                        sourcePath: remoteEntryPath,
+                        targetPath: localEntryPath,
+                        sourceType: 'sftp',
+                        targetType: 'local',
+                        sourceSftpId: sftpId,
+                        totalBytes: entrySize,
+                      },
+                      // onProgress - update parent task
+                      (transferred, total, speed) => {
+                        const totalProgress = completedBytes + transferred;
+                        setUploadTasks(prev =>
+                          prev.map(task =>
+                            task.id === transferId
+                              ? {
+                                ...task,
+                                transferredBytes: Math.max(task.transferredBytes, totalProgress),
+                                totalBytes: Math.max(task.totalBytes, totalProgress, completedBytes + total),
+                                progress: (() => {
+                                  const effectiveTotal = Math.max(task.totalBytes, completedBytes + total);
+                                  if (effectiveTotal <= 0) return task.progress;
+                                  const percent = (totalProgress / effectiveTotal) * 100;
+                                  return Math.max(task.progress, Math.min(percent, 99));
+                                })(),
+                                speed: Number.isFinite(speed) && speed > 0 ? speed : 0,
+                              }
+                              : task
+                          )
+                        );
+                      },
+                      // onComplete
+                      () => {
+                        completedBytes += entrySize;
+                        resolve();
+                      },
+                      // onError
+                      (error) => {
+                        reject(new Error(error));
+                      }
+                    ).catch(reject);
+                  });
+                }
+              }
+            };
+
+            await downloadDir(fullPath, targetPath);
+
+            // Mark as completed
+            setUploadTasks(prev =>
+              prev.map(task =>
+                task.id === transferId
+                  ? {
+                    ...task,
+                    status: "completed" as const,
+                    progress: 100,
+                    transferredBytes: completedBytes,
+                    totalBytes: completedBytes,
+                    speed: 0,
+                  }
+                  : task
+              )
+            );
+            toast.success(`${t("sftp.context.download")}: ${file.name}`, "SFTP");
+          } catch (e) {
+            const errorMsg = e instanceof Error ? e.message : t("sftp.error.downloadFailed");
+            const isCancelError = errorMsg.includes('cancelled') || errorMsg.includes('canceled');
+            setUploadTasks(prev =>
+              prev.map(task =>
+                task.id === transferId
+                  ? {
+                    ...task,
+                    status: isCancelError ? "cancelled" as const : "failed" as const,
+                    speed: 0,
+                    error: isCancelError ? undefined : errorMsg,
+                  }
+                  : task
+              )
+            );
+            if (!isCancelError) {
+              toast.error(errorMsg, "SFTP");
+            }
+          }
           return;
         }
 
@@ -461,20 +615,20 @@ export const useSftpModalTransfers = ({
               prev.map(task =>
                 task.id === transferId
                   ? {
-                      ...task,
-                      transferredBytes: Math.max(
-                        task.transferredBytes,
-                        Math.min(transferred, total > 0 ? total : transferred)
-                      ),
-                      totalBytes: total > 0 ? total : task.totalBytes,
-                      progress: (() => {
-                        const effectiveTotal = total > 0 ? total : task.totalBytes;
-                        if (effectiveTotal <= 0) return task.progress;
-                        const percent = (Math.max(task.transferredBytes, transferred) / effectiveTotal) * 100;
-                        return Math.max(task.progress, Math.min(percent, 100));
-                      })(),
-                      speed: Number.isFinite(speed) && speed > 0 ? speed : 0,
-                    }
+                    ...task,
+                    transferredBytes: Math.max(
+                      task.transferredBytes,
+                      Math.min(transferred, total > 0 ? total : transferred)
+                    ),
+                    totalBytes: total > 0 ? total : task.totalBytes,
+                    progress: (() => {
+                      const effectiveTotal = total > 0 ? total : task.totalBytes;
+                      if (effectiveTotal <= 0) return task.progress;
+                      const percent = (Math.max(task.transferredBytes, transferred) / effectiveTotal) * 100;
+                      return Math.max(task.progress, Math.min(percent, 100));
+                    })(),
+                    speed: Number.isFinite(speed) && speed > 0 ? speed : 0,
+                  }
                   : task
               )
             );
@@ -485,12 +639,12 @@ export const useSftpModalTransfers = ({
               prev.map(task =>
                 task.id === transferId
                   ? {
-                      ...task,
-                      status: "completed" as const,
-                      progress: 100,
-                      transferredBytes: task.totalBytes > 0 ? task.totalBytes : task.transferredBytes,
-                      speed: 0,
-                    }
+                    ...task,
+                    status: "completed" as const,
+                    progress: 100,
+                    transferredBytes: task.totalBytes > 0 ? task.totalBytes : task.transferredBytes,
+                    speed: 0,
+                  }
                   : task
               )
             );
@@ -569,7 +723,7 @@ export const useSftpModalTransfers = ({
         setLoading(false);
       }
     },
-    [currentPath, ensureSftp, isLocalSession, joinPath, readLocalFile, setLoading, showSaveDialog, startStreamTransfer, t],
+    [currentPath, ensureSftp, isLocalSession, joinPath, readLocalFile, setLoading, showSaveDialog, startStreamTransfer, t, listSftp, createUploadBridge],
   );
 
 

@@ -519,15 +519,15 @@ function attachOAuthLoadingOverlay(win) {
   `;
 
   win.webContents.on("did-start-loading", () => {
-    win.webContents.executeJavaScript(injectOverlayScript, true).catch(() => {});
+    win.webContents.executeJavaScript(injectOverlayScript, true).catch(() => { });
   });
 
   win.webContents.on("did-stop-loading", () => {
-    win.webContents.executeJavaScript(removeOverlayScript, true).catch(() => {});
+    win.webContents.executeJavaScript(removeOverlayScript, true).catch(() => { });
   });
 
   win.webContents.on("did-fail-load", () => {
-    win.webContents.executeJavaScript(removeOverlayScript, true).catch(() => {});
+    win.webContents.executeJavaScript(removeOverlayScript, true).catch(() => { });
   });
 }
 
@@ -626,10 +626,10 @@ function setupDeferredShow(win, { timeoutMs = 3000, waitForRendererReady = true 
 async function createWindow(electronModule, options) {
   const { BrowserWindow, nativeTheme, app, screen, shell } = electronModule;
   const { preload, devServerUrl, isDev, appIcon, isMac, onRegisterBridge, electronDir } = options;
-  
+
   // Store app reference for window state persistence
   electronApp = app;
-  
+
   const osTheme = nativeTheme?.shouldUseDarkColors ? "dark" : "light";
   const effectiveTheme = currentTheme === "dark" || currentTheme === "light" ? currentTheme : osTheme;
   const frontendBackground = resolveFrontendBackgroundColor(electronDir || __dirname, effectiveTheme);
@@ -775,6 +775,7 @@ async function createWindow(electronModule, options) {
       if (saveStateTimer) clearTimeout(saveStateTimer);
       const state = getWindowBoundsState(win, lastNormalBounds);
       if (state) saveWindowStateSync(state);
+      closeSettingsWindow();
       return;
     }
 
@@ -871,7 +872,7 @@ async function createWindow(electronModule, options) {
 
   // Production mode - load via custom protocol.
   await win.loadURL("app://netcatty/index.html");
-  
+
   onRegisterBridge?.(win);
   return win;
 }
@@ -882,13 +883,13 @@ async function createWindow(electronModule, options) {
 async function openSettingsWindow(electronModule, options) {
   const { BrowserWindow, shell } = electronModule;
   const { preload, devServerUrl, isDev, appIcon, isMac, electronDir } = options;
-  
+
   // If settings window already exists, just focus it
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.focus();
     return settingsWindow;
   }
-  
+
   const osTheme = electronModule?.nativeTheme?.shouldUseDarkColors ? "dark" : "light";
   const effectiveTheme = currentTheme === "dark" || currentTheme === "light" ? currentTheme : osTheme;
   const frontendBackground = resolveFrontendBackgroundColor(electronDir || __dirname, effectiveTheme);
@@ -1001,7 +1002,7 @@ async function openSettingsWindow(electronModule, options) {
 
   // Load the settings page
   const settingsPath = '/#/settings';
-  
+
   if (isDev) {
     try {
       const baseUrl = getDevRendererBaseUrl(devServerUrl);
@@ -1014,7 +1015,7 @@ async function openSettingsWindow(electronModule, options) {
 
   // Production mode - load via custom protocol.
   await win.loadURL("app://netcatty/index.html#/settings");
-  
+
   return win;
 }
 
@@ -1188,19 +1189,19 @@ function buildAppMenu(Menu, app, isMac, language = currentLanguage) {
   const template = [
     ...(isMac
       ? [
-          {
-            label: app.name,
-            submenu: [
-              { role: "about" },
-              { type: "separator" },
-              { role: "hide" },
-              { role: "hideOthers" },
-              { role: "unhide" },
-              { type: "separator" },
-              { role: "quit" },
-            ],
-          },
-        ]
+        {
+          label: app.name,
+          submenu: [
+            { role: "about" },
+            { type: "separator" },
+            { role: "hide" },
+            { role: "hideOthers" },
+            { role: "unhide" },
+            { type: "separator" },
+            { role: "quit" },
+          ],
+        },
+      ]
       : []),
     {
       label: tMenu(language, "edit"),
@@ -1239,7 +1240,7 @@ function buildAppMenu(Menu, app, isMac, language = currentLanguage) {
       ],
     },
   ];
-  
+
   return Menu.buildFromTemplate(template);
 }
 

@@ -226,7 +226,10 @@ const SftpPaneViewInner: React.FC<SftpPaneViewProps> = ({
     () => ({
       onRename: (fileName: string) => openRenameDialog(fileName),
       onDelete: (fileNames: string[]) => openDeleteConfirm(fileNames),
-      onNewFolder: () => setShowNewFolderDialog(true),
+      onNewFolder: () => {
+        setNewFolderName("");
+        setShowNewFolderDialog(true);
+      },
       onNewFile: () => {
         const defaultName = getNextUntitledName(pane.files.map(f => f.name));
         setNewFileName(defaultName);
@@ -241,6 +244,7 @@ const SftpPaneViewInner: React.FC<SftpPaneViewProps> = ({
       pane.files,
       setFileNameError,
       setNewFileName,
+      setNewFolderName,
       setShowNewFileDialog,
       setShowNewFolderDialog,
     ],
@@ -318,6 +322,7 @@ const SftpPaneViewInner: React.FC<SftpPaneViewProps> = ({
         setFileNameError={setFileNameError}
         setShowNewFileDialog={setShowNewFileDialog}
         setShowNewFolderDialog={setShowNewFolderDialog}
+        setNewFolderName={setNewFolderName}
         bookmarks={bookmarks}
         isCurrentPathBookmarked={isCurrentPathBookmarked}
         onToggleBookmark={toggleBookmark}

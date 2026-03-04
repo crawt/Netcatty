@@ -40,6 +40,7 @@ interface SftpPaneToolbarProps {
   setFileNameError: (value: string | null) => void;
   setShowNewFileDialog: (open: boolean) => void;
   setShowNewFolderDialog: (open: boolean) => void;
+  setNewFolderName: (value: string) => void;
   // Bookmark props
   bookmarks: SftpBookmark[];
   isCurrentPathBookmarked: boolean;
@@ -79,6 +80,7 @@ export const SftpPaneToolbar: React.FC<SftpPaneToolbarProps> = ({
   setFileNameError,
   setShowNewFileDialog,
   setShowNewFolderDialog,
+  setNewFolderName,
   bookmarks,
   isCurrentPathBookmarked,
   onToggleBookmark,
@@ -278,7 +280,10 @@ export const SftpPaneToolbar: React.FC<SftpPaneToolbarProps> = ({
           variant="ghost"
           size="icon"
           className="h-6 w-6"
-          onClick={() => setShowNewFolderDialog(true)}
+          onClick={() => {
+            setNewFolderName("");
+            setShowNewFolderDialog(true);
+          }}
           title={t("sftp.newFolder")}
         >
           <FolderPlus size={14} />
