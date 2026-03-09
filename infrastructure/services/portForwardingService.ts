@@ -78,11 +78,21 @@ export const initReconnectCancelListener = (): (() => void) => {
     if (e.key !== RECONNECT_CANCEL_KEY || !e.newValue) return;
     const ruleId = e.newValue;
     clearReconnectTimer(ruleId);
-    // Also clean up activeConnections if this window had a connecting entry
+
     const conn = activeConnections.get(ruleId);
     if (conn) {
       conn.unsubscribe?.();
       activeConnections.delete(ruleId);
+    }
+
+    // Also ask the backend to stop any tunnel for this rule.
+    // This catches tunnels still in SSH handshake that aren't yet
+    // in the renderer's activeConnections or the backend's list output.
+    const bridge = netcattyBridge.get();
+    if (bridge?.stopPortForwardByRuleId) {
+      bridge.stopPortForwardByRuleId(ruleId).catch((err: unknown) => {
+        logger.warn(`[PortForwardingService] Cross-window stopByRuleId failed for ${ruleId}:`, err);
+      });
     }
   };
   window.addEventListener('storage', handler);
@@ -173,26 +183,23 @@ export const stopAndCleanupRule = (ruleId: string): void => {
     }
 
     activeConnections.delete(ruleId);
+    // Also ask backend to stop by rule ID — catches tunnels this renderer
+    // doesn't track (e.g. started by another window, or still connecting).
+    if (bridge?.stopPortForwardByRuleId) {
+      bridge.stopPortForwardByRuleId(ruleId).catch((err: unknown) => {
+        logger.warn(`[PortForwardingService] Backend stopByRuleId failed for ${ruleId}:`, err);
+      });
+    }
     return;
   }
 
-  // No local activeConnections entry — this renderer may not have started
-  // the tunnel (e.g. settings window cleaning up a tunnel the main window
-  // started).  Query the backend for any tunnel matching this rule ID and
-  // stop it to prevent orphaned tunnels.
+  // No local activeConnections entry — use targeted backend stop by rule ID.
+  // This is simpler and more reliable than listPortForwards + match because
+  // it catches tunnels in ANY state (including SSH handshake in progress).
   const bridge = netcattyBridge.get();
-  if (bridge?.listPortForwards && bridge?.stopPortForward) {
-    bridge.listPortForwards().then((tunnels: { tunnelId: string }[]) => {
-      for (const tunnel of tunnels) {
-        const parsedId = parseRuleIdFromTunnelId(tunnel.tunnelId);
-        if (parsedId === ruleId) {
-          bridge.stopPortForward(tunnel.tunnelId).catch((err: unknown) => {
-            logger.warn(`[PortForwardingService] Cross-window cleanup stop failed for ${ruleId}:`, err);
-          });
-        }
-      }
-    }).catch((err: unknown) => {
-      logger.warn(`[PortForwardingService] Cross-window cleanup list failed:`, err);
+  if (bridge?.stopPortForwardByRuleId) {
+    bridge.stopPortForwardByRuleId(ruleId).catch((err: unknown) => {
+      logger.warn(`[PortForwardingService] Cross-window stopByRuleId failed for ${ruleId}:`, err);
     });
   }
 };

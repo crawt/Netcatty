@@ -386,6 +386,31 @@ function stopAllPortForwards() {
 }
 
 /**
+ * Stop all active port forwards for a given rule ID.
+ * Tunnel IDs follow the format `pf-{ruleId}-{timestamp}`, so we match
+ * by checking if the tunnelId contains the ruleId.
+ * This catches tunnels in ANY state (connecting, active) because it
+ * operates on the main-process portForwardingTunnels map directly.
+ */
+function stopPortForwardByRuleId(_event, { ruleId }) {
+  let stopped = 0;
+  for (const [tunnelId, tunnel] of portForwardingTunnels) {
+    if (tunnelId.includes(ruleId)) {
+      try {
+        if (tunnel.server) tunnel.server.close();
+        if (tunnel.conn) tunnel.conn.end();
+        portForwardingTunnels.delete(tunnelId);
+        console.log(`[PortForward] Stopped tunnel ${tunnelId} for rule ${ruleId}`);
+        stopped++;
+      } catch (err) {
+        console.warn(`[PortForward] Failed to stop tunnel ${tunnelId}:`, err.message);
+      }
+    }
+  }
+  return { stopped };
+}
+
+/**
  * Register IPC handlers for port forwarding operations
  */
 function registerHandlers(ipcMain) {
@@ -394,6 +419,7 @@ function registerHandlers(ipcMain) {
   ipcMain.handle("netcatty:portforward:status", getPortForwardStatus);
   ipcMain.handle("netcatty:portforward:list", listPortForwards);
   ipcMain.handle("netcatty:portforward:stopAll", () => stopAllPortForwards());
+  ipcMain.handle("netcatty:portforward:stopByRuleId", stopPortForwardByRuleId);
 }
 
 module.exports = {
@@ -403,4 +429,5 @@ module.exports = {
   getPortForwardStatus,
   listPortForwards,
   stopAllPortForwards,
+  stopPortForwardByRuleId,
 };

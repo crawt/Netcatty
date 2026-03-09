@@ -280,8 +280,22 @@ export const usePortForwardingState = (): UsePortForwardingStateResult => {
     // Stop tunnels for rules that are being removed or whose connection
     // config has changed (same ID but different host/port/type means the
     // old tunnel is pointing at stale parameters and must be torn down).
+    //
+    // Use globalRules as the diff baseline.  In a freshly opened settings
+    // window, globalRules may still be empty because initializeStore is
+    // async.  Fall back to reading directly from localStorage to avoid
+    // missing tunnels that need to be stopped.
+    let diffBaseline = globalRules;
+    if (diffBaseline.length === 0 && newRules.length > 0) {
+      const stored = localStorageAdapter.read<PortForwardingRule[]>(
+        STORAGE_KEY_PORT_FORWARDING,
+      );
+      if (stored && Array.isArray(stored) && stored.length > 0) {
+        diffBaseline = stored;
+      }
+    }
     const newRulesById = new Map(newRules.map((r) => [r.id, r]));
-    for (const existing of globalRules) {
+    for (const existing of diffBaseline) {
       const incoming = newRulesById.get(existing.id);
       if (!incoming) {
         // Rule removed entirely
