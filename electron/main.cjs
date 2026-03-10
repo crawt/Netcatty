@@ -794,7 +794,11 @@ if (!gotLock) {
     });
 
     // Create the main window
-    void createWindow().catch((err) => {
+    void createWindow().then(() => {
+      // Trigger auto-update check 5 s after window creation.
+      // startAutoCheck() is a no-op on unsupported platforms (Linux deb/rpm/snap).
+      autoUpdateBridge.startAutoCheck(5000);
+    }).catch((err) => {
       console.error("[Main] Failed to create main window:", err);
       showStartupError(err);
       try {
