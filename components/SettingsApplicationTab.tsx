@@ -129,11 +129,9 @@ export default function SettingsApplicationTab({ updateState, checkNow, openRele
         t('update.available.message', { version: result.latestRelease.version }),
         t('update.available.title')
       );
-      // Only open the release page on platforms without auto-download;
-      // on supported platforms checkNow already triggers electron-updater.
-      if (updateState.autoDownloadStatus === 'idle') {
-        openReleasePage();
-      }
+      // Don't auto-open the release page here — checkNow() already triggers
+      // electron-updater on supported platforms, and the Settings > System tab
+      // shows a "Manual Download" link on unsupported platforms.
     } else if (result) {
       setLastCheckResult('upToDate');
       toast.success(
