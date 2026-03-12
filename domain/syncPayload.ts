@@ -28,12 +28,13 @@ export interface SyncableVaultData {
   identities: Identity[];
   snippets: Snippet[];
   customGroups: string[];
+  snippetPackages?: string[];
   knownHosts: KnownHost[];
 }
 
 /** Callbacks used by `applySyncPayload` to import data into local state. */
 export interface SyncPayloadImporters {
-  /** Import vault data (hosts, keys, identities, snippets, customGroups, knownHosts). */
+  /** Import vault data (hosts, keys, identities, snippets, customGroups, snippetPackages, knownHosts). */
   importVaultData: (jsonString: string) => void;
   /** Import port-forwarding rules (lives outside the vault hook). */
   importPortForwardingRules?: (rules: PortForwardingRule[]) => void;
@@ -60,6 +61,7 @@ export function buildSyncPayload(
     identities: vault.identities,
     snippets: vault.snippets,
     customGroups: vault.customGroups,
+    snippetPackages: vault.snippetPackages,
     knownHosts: vault.knownHosts,
     portForwardingRules,
     syncedAt: Date.now(),
@@ -87,6 +89,9 @@ export function applySyncPayload(
     snippets: payload.snippets,
     customGroups: payload.customGroups,
   };
+  if (payload.snippetPackages !== undefined) {
+    vaultImport.snippetPackages = payload.snippetPackages;
+  }
   if (payload.knownHosts !== undefined) {
     vaultImport.knownHosts = payload.knownHosts;
   }
