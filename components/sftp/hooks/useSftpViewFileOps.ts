@@ -119,6 +119,10 @@ export const useSftpViewFileOps = ({
     file: SftpFileEntry;
     side: "left" | "right";
     fullPath: string;
+    /** Host ID at the time the file was opened, to prevent saving to wrong host.
+     * Uses hostId (not connectionId) because auto-reconnect after a transient
+     * disconnect generates a fresh connectionId for the same endpoint. */
+    hostId?: string;
   } | null>(null);
   const [textEditorContent, setTextEditorContent] = useState("");
   const [loadingTextContent, setLoadingTextContent] = useState(false);
@@ -148,7 +152,7 @@ export const useSftpViewFileOps = ({
 
       try {
         setLoadingTextContent(true);
-        setTextEditorTarget({ file, side, fullPath });
+        setTextEditorTarget({ file, side, fullPath, hostId: pane.connection.hostId });
 
         const content = await sftpRef.current.readTextFile(side, fullPath);
 
@@ -241,6 +245,19 @@ export const useSftpViewFileOps = ({
   const handleSaveTextFile = useCallback(
     async (content: string) => {
       if (!textEditorTarget) return;
+
+      // Verify the SFTP connection hasn't switched to a different host.
+      // We check hostId (not connectionId) because auto-reconnect after a
+      // transient disconnect generates a fresh connectionId for the same
+      // endpoint.  The auto-connect effect in SftpSidePanel blocks
+      // host-switching while the editor is open, so a hostId mismatch here
+      // reliably indicates a genuinely different endpoint.
+      const currentPane = textEditorTarget.side === "left"
+        ? sftpRef.current.leftPane
+        : sftpRef.current.rightPane;
+      if (textEditorTarget.hostId && currentPane.connection?.hostId !== textEditorTarget.hostId) {
+        throw new Error("SFTP connection changed while editing — file not saved to prevent writing to wrong host");
+      }
 
       await sftpRef.current.writeTextFile(
         textEditorTarget.side,

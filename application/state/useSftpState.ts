@@ -101,11 +101,25 @@ export const useSftpState = (
     }
   }, []);
 
+  const clearDirCacheEntry = useCallback((connectionId: string, path: string) => {
+    // Remove all encoding variants of this path from the cache
+    for (const key of dirCacheRef.current.keys()) {
+      if (key.startsWith(`${connectionId}::`) && key.endsWith(`::${path}`)) {
+        dirCacheRef.current.delete(key);
+      }
+    }
+  }, []);
+
   // Ref to track pending reconnections to avoid multiple reconnect attempts
   const reconnectingRef = useRef<{ left: boolean; right: boolean }>({
     left: false,
     right: false,
   });
+
+  // Map connectionId → cache key, set at connect time so each tab's
+  // navigateTo can use the correct cache key even when multiple tabs
+  // share the same hostId with different session-time overrides.
+  const connectionCacheKeyMapRef = useRef<Map<string, string>>(new Map());
 
   // Store last connected host info for reconnection
   const lastConnectedHostRef = useRef<{
@@ -149,10 +163,12 @@ export const useSftpState = (
     dirCacheRef,
     sftpSessionsRef,
     lastConnectedHostRef,
+    connectionCacheKeyMapRef,
     reconnectingRef,
     makeCacheKey,
     clearCacheForConnection,
     createEmptyPane: createPane,
+    autoConnectLocalOnMount: options?.autoConnectLocalOnMount,
   });
 
   const {
@@ -173,6 +189,7 @@ export const useSftpState = (
     renameFile,
     changePermissions,
   } = useSftpPaneActions({
+    hosts,
     getActivePane,
     updateTab,
     updateActiveTab,
@@ -182,6 +199,7 @@ export const useSftpState = (
     dirCacheRef,
     sftpSessionsRef,
     lastConnectedHostRef,
+    connectionCacheKeyMapRef,
     reconnectingRef,
     makeCacheKey,
     clearCacheForConnection,
@@ -249,12 +267,16 @@ export const useSftpState = (
     writeTextFile,
     downloadToTempAndOpen,
     uploadExternalFiles,
+    uploadExternalEntries,
     cancelExternalUpload,
     selectApplication,
+    activeFileWatchCountRef,
   } = useSftpExternalOperations({
     getActivePane,
     refresh,
     sftpSessionsRef,
+    connectionCacheKeyMapRef,
+    clearDirCacheEntry,
     useCompressedUpload: options?.useCompressedUpload,
     addExternalUpload,
     updateExternalUpload,
@@ -298,6 +320,7 @@ export const useSftpState = (
     writeTextFile,
     downloadToTempAndOpen,
     uploadExternalFiles,
+    uploadExternalEntries,
     cancelExternalUpload,
     selectApplication,
     startTransfer,
@@ -344,6 +367,7 @@ export const useSftpState = (
     writeTextFile,
     downloadToTempAndOpen,
     uploadExternalFiles,
+    uploadExternalEntries,
     cancelExternalUpload,
     selectApplication,
     startTransfer,
@@ -396,6 +420,8 @@ export const useSftpState = (
     writeTextFile: (...args: Parameters<typeof writeTextFile>) => methodsRef.current.writeTextFile(...args),
     downloadToTempAndOpen: (...args: Parameters<typeof downloadToTempAndOpen>) => methodsRef.current.downloadToTempAndOpen(...args),
     uploadExternalFiles: (...args: Parameters<typeof uploadExternalFiles>) => methodsRef.current.uploadExternalFiles(...args),
+    uploadExternalEntries: (...args: Parameters<typeof uploadExternalEntries>) =>
+      methodsRef.current.uploadExternalEntries(...args),
     cancelExternalUpload: () => methodsRef.current.cancelExternalUpload(),
     selectApplication: () => methodsRef.current.selectApplication(),
     startTransfer: (...args: Parameters<typeof startTransfer>) => methodsRef.current.startTransfer(...args),
@@ -407,7 +433,8 @@ export const useSftpState = (
     dismissTransfer: (...args: Parameters<typeof dismissTransfer>) => methodsRef.current.dismissTransfer(...args),
     resolveConflict: (...args: Parameters<typeof resolveConflict>) => methodsRef.current.resolveConflict(...args),
     getSftpIdForConnection: (...args: Parameters<typeof getSftpIdForConnection>) => methodsRef.current.getSftpIdForConnection(...args),
-  }), []); // Empty deps - these wrappers never change
+    activeFileWatchCountRef,
+  }), [activeFileWatchCountRef]); // activeFileWatchCountRef is a stable ref
 
   // Return object with stable method references but reactive state
   // State changes will cause re-renders, but method references stay stable
