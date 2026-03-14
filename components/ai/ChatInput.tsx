@@ -6,14 +6,13 @@
  * and a bottom toolbar with muted controls + subtle send button.
  */
 
-import { AtSign, Check, ChevronDown, ChevronRight, Cpu, Expand, FileText, FolderOpen, ImageIcon, Plus, X } from 'lucide-react';
+import { AtSign, Check, ChevronDown, ChevronRight, Cpu, Expand, FileText, ImageIcon, Plus, X } from 'lucide-react';
 import React, { useCallback, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { FormEvent } from 'react';
 import type { UploadedImage } from '../../application/state/useImageUpload';
 import {
   PromptInput,
-  PromptInputButton,
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,

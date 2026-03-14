@@ -23,6 +23,28 @@ import type { TerminalFont } from "../infrastructure/config/fonts";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
+class AITabErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 32, color: "#f87171", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+          <h3 style={{ marginBottom: 8 }}>AI Settings Error</h3>
+          <div>{this.state.error.message}</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: "#888" }}>{this.state.error.stack}</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 type SettingsState = ReturnType<typeof useSettingsState> & {
     availableFonts: TerminalFont[];
 };
@@ -238,6 +260,7 @@ const SettingsPageContent: React.FC<{ settings: SettingsState }> = ({ settings }
                     )}
 
                     {mountedTabs.has("ai") && (
+                        <AITabErrorBoundary>
                         <React.Suspense fallback={null}>
                         <SettingsAITab
                             providers={aiState.providers}
@@ -260,6 +283,7 @@ const SettingsPageContent: React.FC<{ settings: SettingsState }> = ({ settings }
                             setMaxIterations={aiState.setMaxIterations}
                         />
                         </React.Suspense>
+                        </AITabErrorBoundary>
                     )}
 
                     {mountedTabs.has("sync") && (

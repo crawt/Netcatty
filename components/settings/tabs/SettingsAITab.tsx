@@ -1,5 +1,5 @@
 /**
- * Settings AI Tab - AI provider configuration, external agents, and safety settings
+ * Settings AI Tab - AI provider configuration, agent CLI detection, and safety settings
  */
 import {
   Bot,
@@ -14,16 +14,14 @@ import {
   Pencil,
   Plus,
   RefreshCw,
-  ScanSearch,
   Shield,
   Trash2,
   X,
 } from "lucide-react";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AIPermissionMode,
   AIProviderId,
-  DiscoveredAgent,
   ExternalAgentConfig,
   ProviderConfig,
 } from "../../../infrastructure/ai/types";
@@ -84,12 +82,19 @@ interface CodexLoginSession {
   exitCode: number | null;
 }
 
+interface AgentPathInfo {
+  path: string | null;
+  version: string | null;
+  available: boolean;
+}
+
 interface NetcattyAiBridge {
   aiCodexGetIntegration?: () => Promise<CodexIntegrationStatus>;
   aiCodexStartLogin?: () => Promise<{ ok: boolean; session?: CodexLoginSession; error?: string }>;
   aiCodexGetLoginSession?: (sessionId: string) => Promise<{ ok: boolean; session?: CodexLoginSession; error?: string }>;
   aiCodexCancelLogin?: (sessionId: string) => Promise<{ ok: boolean; found?: boolean; session?: CodexLoginSession; error?: string }>;
   aiCodexLogout?: () => Promise<{ ok: boolean; state?: CodexIntegrationState; isConnected?: boolean; rawOutput?: string; logoutOutput?: string; error?: string }>;
+  aiResolveCli?: (params: { command: string; customPath?: string }) => Promise<AgentPathInfo>;
   openExternal?: (url: string) => Promise<void>;
 }
 
@@ -105,22 +110,44 @@ function normalizeCodexBridgeError(error: unknown): string {
   return message;
 }
 
+// Agent default configs for registration in externalAgents
+const AGENT_DEFAULTS: Record<string, Omit<ExternalAgentConfig, "id" | "command" | "enabled">> = {
+  codex: {
+    name: "Codex CLI",
+    args: ["exec", "--full-auto", "--json", "{prompt}"],
+    icon: "openai",
+    acpCommand: "codex-acp",
+    acpArgs: [],
+  },
+  claude: {
+    name: "Claude Code",
+    args: ["-p", "--output-format", "text", "{prompt}"],
+    icon: "claude",
+    acpCommand: "claude-code-acp",
+    acpArgs: [],
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Provider icon helper
 // ---------------------------------------------------------------------------
 
-const PROVIDER_ICON_PATHS: Record<AIProviderId, string> = {
+type SettingsIconId = AIProviderId | "claude";
+
+const SETTINGS_ICON_PATHS: Record<SettingsIconId, string> = {
   openai: "/ai/providers/openai.svg",
   anthropic: "/ai/providers/anthropic.svg",
+  claude: "/ai/agents/claude.svg",
   google: "/ai/providers/google.svg",
   ollama: "/ai/providers/ollama.svg",
   openrouter: "/ai/providers/openrouter.svg",
   custom: "/ai/providers/custom.svg",
 };
 
-const PROVIDER_COLORS: Record<AIProviderId, string> = {
+const SETTINGS_ICON_COLORS: Record<SettingsIconId, string> = {
   openai: "bg-emerald-600",
   anthropic: "bg-orange-600",
+  claude: "bg-orange-600",
   google: "bg-blue-600",
   ollama: "bg-purple-600",
   openrouter: "bg-pink-600",
@@ -128,18 +155,18 @@ const PROVIDER_COLORS: Record<AIProviderId, string> = {
 };
 
 const ProviderIconBadge: React.FC<{
-  providerId: AIProviderId;
+  providerId: SettingsIconId;
   size?: "sm" | "md";
 }> = ({ providerId, size = "md" }) => (
   <div
     className={cn(
       "rounded-md flex items-center justify-center shrink-0 overflow-hidden",
       size === "sm" ? "w-5 h-5" : "w-8 h-8",
-      PROVIDER_COLORS[providerId],
+      SETTINGS_ICON_COLORS[providerId],
     )}
   >
     <img
-      src={PROVIDER_ICON_PATHS[providerId]}
+      src={SETTINGS_ICON_PATHS[providerId]}
       alt=""
       aria-hidden="true"
       draggable={false}
@@ -161,6 +188,175 @@ interface ProviderFormState {
   defaultModel: string;
 }
 
+// Fetch models from a provider's models endpoint (e.g. OpenRouter /api/v1/models)
+interface FetchedModel {
+  id: string;
+  name?: string;
+}
+
+interface FetchBridge {
+  aiFetch?: (url: string, method?: string, headers?: Record<string, string>, body?: string) => Promise<{ ok: boolean; data: string; error?: string }>;
+}
+
+function getFetchBridge(): FetchBridge | undefined {
+  return (window as unknown as { netcatty?: FetchBridge }).netcatty;
+}
+
+// ---------------------------------------------------------------------------
+// Model Selector (searchable dropdown with remote fetch)
+// ---------------------------------------------------------------------------
+
+const ModelSelector: React.FC<{
+  value: string;
+  onChange: (value: string) => void;
+  baseURL: string;
+  modelsEndpoint: string;
+}> = ({ value, onChange, baseURL, modelsEndpoint }) => {
+  const [models, setModels] = useState<FetchedModel[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const [hasFetched, setHasFetched] = useState(false);
+
+  const fetchModels = useCallback(async () => {
+    const bridge = getFetchBridge();
+    if (!bridge?.aiFetch) return;
+
+    setIsLoading(true);
+    setError(null);
+    try {
+      const url = `${baseURL.replace(/\/+$/, "")}${modelsEndpoint}`;
+      const result = await bridge.aiFetch(url, "GET");
+      if (!result.ok) {
+        setError(`Failed to fetch models (${result.error || "unknown error"})`);
+        return;
+      }
+      const parsed = JSON.parse(result.data);
+      const list: FetchedModel[] = (parsed.data || parsed.models || []).map((m: { id: string; name?: string }) => ({
+        id: m.id,
+        name: m.name,
+      }));
+      // Sort by name/id
+      list.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+      setModels(list);
+      setHasFetched(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to parse response");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [baseURL, modelsEndpoint]);
+
+  // Fetch on first open
+  useEffect(() => {
+    if (isOpen && !hasFetched && !isLoading) {
+      void fetchModels();
+    }
+  }, [isOpen, hasFetched, isLoading, fetchModels]);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return models;
+    const q = search.toLowerCase();
+    return models.filter((m) =>
+      m.id.toLowerCase().includes(q) || (m.name && m.name.toLowerCase().includes(q)),
+    );
+  }, [models, search]);
+
+  return (
+    <div className="relative">
+      {/* Input with dropdown toggle */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onFocus={() => setIsOpen(true)}
+            placeholder="Search or type model ID..."
+            className="w-full h-8 rounded-md border border-input bg-background px-3 pr-8 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+          <button
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          >
+            <ChevronDown size={14} className={cn("transition-transform", isOpen && "rotate-180")} />
+          </button>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => { setHasFetched(false); void fetchModels(); }}
+          disabled={isLoading}
+          className="shrink-0 px-2"
+          title="Refresh models"
+        >
+          <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
+        </Button>
+      </div>
+
+      {/* Dropdown */}
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-[100]" onClick={() => setIsOpen(false)} />
+          <div className="absolute top-full left-0 right-0 mt-1 z-[101] rounded-md border border-border bg-popover shadow-md">
+            {/* Search within dropdown */}
+            <div className="p-2 border-b border-border/60">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter models..."
+                autoFocus
+                className="w-full h-7 rounded border border-input bg-background px-2 text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </div>
+
+            <div className="max-h-60 overflow-y-auto">
+              {isLoading ? (
+                <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                  <RefreshCw size={14} className="animate-spin inline mr-1.5" />
+                  Loading models...
+                </div>
+              ) : error ? (
+                <div className="px-3 py-4 text-center text-xs text-destructive">{error}</div>
+              ) : filtered.length === 0 ? (
+                <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                  {hasFetched ? "No matching models" : "Click to load models"}
+                </div>
+              ) : (
+                filtered.slice(0, 100).map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => {
+                      onChange(m.id);
+                      setIsOpen(false);
+                      setSearch("");
+                    }}
+                    className={cn(
+                      "w-full text-left px-3 py-1.5 text-xs hover:bg-accent transition-colors flex items-center justify-between gap-2",
+                      m.id === value && "bg-accent",
+                    )}
+                  >
+                    <span className="font-mono truncate">{m.id}</span>
+                    {m.id === value && <Check size={12} className="text-primary shrink-0" />}
+                  </button>
+                ))
+              )}
+              {filtered.length > 100 && (
+                <div className="px-3 py-2 text-center text-[10px] text-muted-foreground border-t border-border/40">
+                  Showing first 100 of {filtered.length} models. Type to filter.
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 const ProviderConfigForm: React.FC<{
   provider: ProviderConfig;
   onSave: (updates: Partial<ProviderConfig>) => void;
@@ -173,6 +369,9 @@ const ProviderConfigForm: React.FC<{
   });
   const [showApiKey, setShowApiKey] = useState(false);
   const [isDecrypting, setIsDecrypting] = useState(false);
+
+  const preset = PROVIDER_PRESETS[provider.providerId];
+  const hasModelsEndpoint = !!preset?.modelsEndpoint;
 
   // Decrypt and load existing API key on mount
   useEffect(() => {
@@ -239,7 +438,7 @@ const ProviderConfigForm: React.FC<{
           type="text"
           value={form.baseURL}
           onChange={(e) => setForm((prev) => ({ ...prev, baseURL: e.target.value }))}
-          placeholder={PROVIDER_PRESETS[provider.providerId]?.defaultBaseURL || "https://"}
+          placeholder={preset?.defaultBaseURL || "https://"}
           className="w-full h-8 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
       </div>
@@ -247,13 +446,22 @@ const ProviderConfigForm: React.FC<{
       {/* Default Model */}
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Default Model</label>
-        <input
-          type="text"
-          value={form.defaultModel}
-          onChange={(e) => setForm((prev) => ({ ...prev, defaultModel: e.target.value }))}
-          placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
-          className="w-full h-8 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
+        {hasModelsEndpoint ? (
+          <ModelSelector
+            value={form.defaultModel}
+            onChange={(val) => setForm((prev) => ({ ...prev, defaultModel: val }))}
+            baseURL={form.baseURL || preset.defaultBaseURL}
+            modelsEndpoint={preset.modelsEndpoint!}
+          />
+        ) : (
+          <input
+            type="text"
+            value={form.defaultModel}
+            onChange={(e) => setForm((prev) => ({ ...prev, defaultModel: e.target.value }))}
+            placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
+            className="w-full h-8 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+        )}
       </div>
 
       {/* Actions */}
@@ -411,77 +619,15 @@ const AddProviderDropdown: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// External Agent Card
+// Codex Connection Card (with path detection)
 // ---------------------------------------------------------------------------
 
-const ExternalAgentCard: React.FC<{
-  agent: ExternalAgentConfig;
-  isDefault: boolean;
-  onToggleEnabled: (enabled: boolean) => void;
-  onSetDefault: () => void;
-  onRemove: () => void;
-}> = ({ agent, isDefault, onToggleEnabled, onSetDefault, onRemove }) => (
-  <div className="flex items-center gap-3 py-2.5 px-3 rounded-lg border border-border/60 bg-muted/20">
-    <div className="w-7 h-7 rounded-md bg-muted flex items-center justify-center shrink-0">
-      <Bot size={14} className="text-muted-foreground" />
-    </div>
-    <div className="flex-1 min-w-0">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-medium truncate">{agent.name}</span>
-        {isDefault && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/20 text-primary font-medium">
-            Default
-          </span>
-        )}
-      </div>
-      <div className="text-xs text-muted-foreground font-mono truncate mt-0.5">
-        {agent.command} {agent.args?.join(" ") ?? ""}
-      </div>
-    </div>
-    <div className="flex items-center gap-1 shrink-0">
-      {!isDefault && (
-        <button
-          onClick={onSetDefault}
-          className="px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-          title="Set as default"
-        >
-          Set default
-        </button>
-      )}
-      <button
-        onClick={onRemove}
-        className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-        title="Remove"
-      >
-        <Trash2 size={14} />
-      </button>
-      <Toggle checked={agent.enabled} onChange={onToggleEnabled} />
-    </div>
-  </div>
-);
-
-const DetectedAgentCard: React.FC<{
-  agent: DiscoveredAgent;
-  onAdd: () => void;
-}> = ({ agent, onAdd }) => (
-  <div className="flex items-center gap-3 py-2.5 px-3 rounded-lg border border-border/60 bg-muted/20">
-    <div className="w-7 h-7 rounded-md bg-muted flex items-center justify-center shrink-0">
-      <Bot size={14} className="text-muted-foreground" />
-    </div>
-    <div className="flex-1 min-w-0">
-      <div className="text-sm font-medium truncate">{agent.name}</div>
-      <div className="text-xs text-muted-foreground font-mono truncate mt-0.5">
-        {agent.version || agent.path}
-      </div>
-    </div>
-    <Button variant="outline" size="sm" onClick={onAdd} className="gap-1.5">
-      <Plus size={14} />
-      Add
-    </Button>
-  </div>
-);
-
 const CodexConnectionCard: React.FC<{
+  pathInfo: AgentPathInfo | null;
+  isResolvingPath: boolean;
+  customPath: string;
+  onCustomPathChange: (path: string) => void;
+  onRecheckPath: () => void;
   integration: CodexIntegrationStatus | null;
   loginSession: CodexLoginSession | null;
   isLoading: boolean;
@@ -493,6 +639,11 @@ const CodexConnectionCard: React.FC<{
   onOpenUrl: () => void;
   onLogout: () => void;
 }> = ({
+  pathInfo,
+  isResolvingPath,
+  customPath,
+  onCustomPathChange,
+  onRecheckPath,
   integration,
   loginSession,
   isLoading,
@@ -504,21 +655,31 @@ const CodexConnectionCard: React.FC<{
   onOpenUrl,
   onLogout,
 }) => {
-  const status = loginSession?.state === "running"
-    ? "Awaiting login"
-    : integration?.state === "connected_chatgpt"
-      ? "Connected via ChatGPT"
-      : integration?.state === "connected_api_key"
-        ? "Connected via API key"
-        : integration?.state === "not_logged_in"
-          ? "Not connected"
-          : "Status unknown";
+  const found = pathInfo?.available;
 
-  const statusClassName = loginSession?.state === "running"
-    ? "text-amber-500"
-    : integration?.isConnected
-      ? "text-emerald-500"
-      : "text-muted-foreground";
+  const status = isResolvingPath
+    ? "Detecting..."
+    : !found
+      ? "Not found"
+      : loginSession?.state === "running"
+        ? "Awaiting login"
+        : integration?.state === "connected_chatgpt"
+          ? "Connected via ChatGPT"
+          : integration?.state === "connected_api_key"
+            ? "Connected via API key"
+            : integration?.state === "not_logged_in"
+              ? "Not connected"
+              : "Status unknown";
+
+  const statusClassName = isResolvingPath
+    ? "text-muted-foreground"
+    : !found
+      ? "text-amber-500"
+      : loginSession?.state === "running"
+        ? "text-amber-500"
+        : integration?.isConnected
+          ? "text-emerald-500"
+          : "text-muted-foreground";
 
   const outputText = loginSession?.error
     ? loginSession.error
@@ -546,40 +707,78 @@ const CodexConnectionCard: React.FC<{
         </div>
       </div>
 
-      <div className="flex items-center gap-2 flex-wrap">
-        {loginSession?.state === "running" ? (
-          <>
-            <Button variant="default" size="sm" onClick={onOpenUrl} disabled={!loginSession.url}>
-              <ExternalLink size={14} className="mr-1.5" />
-              Open Login
+      {/* Path detection info */}
+      {found ? (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Path:</span>
+          <span className="font-mono text-foreground truncate">{pathInfo.path}</span>
+          {pathInfo.version && (
+            <>
+              <span className="text-muted-foreground">|</span>
+              <span className="text-muted-foreground">{pathInfo.version}</span>
+            </>
+          )}
+        </div>
+      ) : !isResolvingPath ? (
+        <div className="space-y-2">
+          <p className="text-xs text-amber-500">
+            Could not find <span className="font-mono">codex</span> in PATH. Install it or specify the executable path below.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={customPath}
+              onChange={(e) => onCustomPathChange(e.target.value)}
+              placeholder="e.g. /usr/local/bin/codex"
+              className="flex-1 h-8 rounded-md border border-input bg-background px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <Button variant="outline" size="sm" onClick={onRecheckPath} disabled={!customPath.trim()}>
+              <RefreshCw size={14} className="mr-1.5" />
+              Check
             </Button>
-            <Button variant="outline" size="sm" onClick={onCancel}>
-              <X size={14} className="mr-1.5" />
-              Cancel
+          </div>
+        </div>
+      ) : null}
+
+      {/* Connection & login UI – only when codex is detected */}
+      {found && (
+        <>
+          <div className="border-t border-border/40 pt-3 flex items-center gap-2 flex-wrap">
+            {loginSession?.state === "running" ? (
+              <>
+                <Button variant="default" size="sm" onClick={onOpenUrl} disabled={!loginSession.url}>
+                  <ExternalLink size={14} className="mr-1.5" />
+                  Open Login
+                </Button>
+                <Button variant="outline" size="sm" onClick={onCancel}>
+                  <X size={14} className="mr-1.5" />
+                  Cancel
+                </Button>
+              </>
+            ) : integration?.isConnected ? (
+              <Button variant="outline" size="sm" onClick={onLogout}>
+                <LogOut size={14} className="mr-1.5" />
+                Logout
+              </Button>
+            ) : (
+              <Button variant="default" size="sm" onClick={onConnect}>
+                <LogIn size={14} className="mr-1.5" />
+                Connect ChatGPT
+              </Button>
+            )}
+
+            <Button variant="outline" size="sm" onClick={onRefresh} disabled={isLoading}>
+              <RefreshCw size={14} className={cn("mr-1.5", isLoading && "animate-spin")} />
+              Refresh Status
             </Button>
-          </>
-        ) : integration?.isConnected ? (
-          <Button variant="outline" size="sm" onClick={onLogout}>
-            <LogOut size={14} className="mr-1.5" />
-            Logout
-          </Button>
-        ) : (
-          <Button variant="default" size="sm" onClick={onConnect}>
-            <LogIn size={14} className="mr-1.5" />
-            Connect ChatGPT
-          </Button>
-        )}
+          </div>
 
-        <Button variant="outline" size="sm" onClick={onRefresh} disabled={isLoading}>
-          <RefreshCw size={14} className={cn("mr-1.5", isLoading && "animate-spin")} />
-          Refresh Status
-        </Button>
-      </div>
-
-      {hasOpenAiProviderKey && (
-        <p className="text-xs text-emerald-500">
-          Enabled OpenAI provider API key detected. Codex ACP can also authenticate without ChatGPT login.
-        </p>
+          {hasOpenAiProviderKey && (
+            <p className="text-xs text-emerald-500">
+              Enabled OpenAI provider API key detected. Codex ACP can also authenticate without ChatGPT login.
+            </p>
+          )}
+        </>
       )}
 
       {error && (
@@ -588,7 +787,7 @@ const CodexConnectionCard: React.FC<{
         </p>
       )}
 
-      {outputText && (
+      {found && outputText && (
         <pre className="rounded-md border border-border/60 bg-background px-3 py-2 text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap max-h-40 overflow-auto">
           {outputText}
         </pre>
@@ -598,69 +797,85 @@ const CodexConnectionCard: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// Add Agent Form
+// Claude Code Card (with path detection)
 // ---------------------------------------------------------------------------
 
-const AddAgentForm: React.FC<{
-  onAdd: (agent: ExternalAgentConfig) => void;
-  onCancel: () => void;
-}> = ({ onAdd, onCancel }) => {
-  const [name, setName] = useState("");
-  const [command, setCommand] = useState("");
-  const [args, setArgs] = useState("");
+const ClaudeCodeCard: React.FC<{
+  pathInfo: AgentPathInfo | null;
+  isResolvingPath: boolean;
+  customPath: string;
+  onCustomPathChange: (path: string) => void;
+  onRecheckPath: () => void;
+}> = ({
+  pathInfo,
+  isResolvingPath,
+  customPath,
+  onCustomPathChange,
+  onRecheckPath,
+}) => {
+  const found = pathInfo?.available;
 
-  const handleSubmit = useCallback(() => {
-    if (!name.trim() || !command.trim()) return;
-    onAdd({
-      id: `agent_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      name: name.trim(),
-      command: command.trim(),
-      args: args.trim() ? args.trim().split(/\s+/) : undefined,
-      enabled: true,
-    });
-  }, [name, command, args, onAdd]);
+  const statusText = isResolvingPath
+    ? "Detecting..."
+    : found
+      ? "Detected"
+      : "Not found";
+
+  const statusClassName = isResolvingPath
+    ? "text-muted-foreground"
+    : found
+      ? "text-emerald-500"
+      : "text-amber-500";
 
   return (
     <div className="rounded-lg border border-border/60 bg-muted/20 p-4 space-y-3">
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Name</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Agent name"
-          className="w-full h-8 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <ProviderIconBadge providerId="claude" size="sm" />
+            <span className="text-sm font-medium">Claude Code</span>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2 leading-5">
+            Anthropic's agentic coding assistant. Uses <span className="font-mono">claude-code-acp</span> for ACP protocol streaming.
+          </p>
+        </div>
+        <div className={cn("text-xs font-medium shrink-0", statusClassName)}>
+          {statusText}
+        </div>
       </div>
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Command</label>
-        <input
-          type="text"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          placeholder="e.g. /usr/local/bin/my-agent"
-          className="w-full h-8 rounded-md border border-input bg-background px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-      </div>
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Arguments (space-separated)</label>
-        <input
-          type="text"
-          value={args}
-          onChange={(e) => setArgs(e.target.value)}
-          placeholder="e.g. --stdio --verbose"
-          className="w-full h-8 rounded-md border border-input bg-background px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-      </div>
-      <div className="flex items-center gap-2 pt-1">
-        <Button variant="default" size="sm" onClick={handleSubmit} disabled={!name.trim() || !command.trim()}>
-          <Plus size={14} className="mr-1.5" />
-          Add Agent
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
+
+      {/* Path detection info */}
+      {found ? (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Path:</span>
+          <span className="font-mono text-foreground truncate">{pathInfo.path}</span>
+          {pathInfo.version && (
+            <>
+              <span className="text-muted-foreground">|</span>
+              <span className="text-muted-foreground">{pathInfo.version}</span>
+            </>
+          )}
+        </div>
+      ) : !isResolvingPath ? (
+        <div className="space-y-2">
+          <p className="text-xs text-amber-500">
+            Could not find <span className="font-mono">claude</span> in PATH. Install it or specify the executable path below.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={customPath}
+              onChange={(e) => onCustomPathChange(e.target.value)}
+              placeholder="e.g. /usr/local/bin/claude"
+              className="flex-1 h-8 rounded-md border border-input bg-background px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <Button variant="outline" size="sm" onClick={onRecheckPath} disabled={!customPath.trim()}>
+              <RefreshCw size={14} className="mr-1.5" />
+              Check
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };
@@ -676,7 +891,7 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
   removeProvider,
   activeProviderId,
   setActiveProviderId,
-  activeModelId,
+  activeModelId: _activeModelId,
   setActiveModelId,
   globalPermissionMode,
   setGlobalPermissionMode,
@@ -690,18 +905,106 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
   setMaxIterations,
 }) => {
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
-  const [showAddAgent, setShowAddAgent] = useState(false);
   const [codexIntegration, setCodexIntegration] = useState<CodexIntegrationStatus | null>(null);
   const [codexLoginSession, setCodexLoginSession] = useState<CodexLoginSession | null>(null);
   const [isCodexLoading, setIsCodexLoading] = useState(false);
   const [codexError, setCodexError] = useState<string | null>(null);
 
+  // Path detection state
+  const [codexPathInfo, setCodexPathInfo] = useState<AgentPathInfo | null>(null);
+  const [codexCustomPath, setCodexCustomPath] = useState("");
+  const [isResolvingCodex, setIsResolvingCodex] = useState(false);
+
+  const [claudePathInfo, setClaudePathInfo] = useState<AgentPathInfo | null>(null);
+  const [claudeCustomPath, setClaudeCustomPath] = useState("");
+  const [isResolvingClaude, setIsResolvingClaude] = useState(false);
+
   const {
-    unconfiguredAgents,
+    discoveredAgents,
     isDiscovering,
-    rediscover,
     enableAgent,
   } = useAgentDiscovery(externalAgents, setExternalAgents);
+
+  // Derive path info from discovery results
+  useEffect(() => {
+    if (isDiscovering) return;
+
+    const codex = discoveredAgents.find((a) => a.command === "codex");
+    setCodexPathInfo(
+      codex
+        ? { path: codex.path, version: codex.version, available: true }
+        : { path: null, version: null, available: false },
+    );
+
+    const claude = discoveredAgents.find((a) => a.command === "claude");
+    setClaudePathInfo(
+      claude
+        ? { path: claude.path, version: claude.version, available: true }
+        : { path: null, version: null, available: false },
+    );
+  }, [isDiscovering, discoveredAgents]);
+
+  // Auto-register discovered agents in externalAgents
+  useEffect(() => {
+    if (isDiscovering || discoveredAgents.length === 0) return;
+
+    setExternalAgents((prev) => {
+      const agentsToRegister: ExternalAgentConfig[] = [];
+
+      for (const da of discoveredAgents) {
+        if (da.command !== "codex" && da.command !== "claude") continue;
+        const agentId = `discovered_${da.command}`;
+        if (prev.some((ea) => ea.id === agentId)) continue;
+        agentsToRegister.push(enableAgent(da));
+      }
+
+      return agentsToRegister.length > 0 ? [...prev, ...agentsToRegister] : prev;
+    });
+  }, [isDiscovering, discoveredAgents, enableAgent, setExternalAgents]);
+
+  // Validate a custom path for an agent
+  const handleCheckCustomPath = useCallback(async (agentKey: "codex" | "claude") => {
+    const bridge = getBridge();
+    if (!bridge?.aiResolveCli) return;
+
+    const customPath = agentKey === "codex" ? codexCustomPath : claudeCustomPath;
+    const setInfo = agentKey === "codex" ? setCodexPathInfo : setClaudePathInfo;
+    const setResolving = agentKey === "codex" ? setIsResolvingCodex : setIsResolvingClaude;
+
+    setResolving(true);
+    try {
+      const result = await bridge.aiResolveCli({
+        command: agentKey,
+        customPath: customPath.trim(),
+      });
+      setInfo(result);
+
+      // Register/update in externalAgents if valid
+      if (result.available && result.path) {
+        const agentId = `discovered_${agentKey}`;
+        const defaults = AGENT_DEFAULTS[agentKey];
+        setExternalAgents((prev) => {
+          const idx = prev.findIndex((a) => a.id === agentId);
+          const config: ExternalAgentConfig = {
+            id: agentId,
+            command: result.path!,
+            enabled: true,
+            ...defaults,
+          };
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], command: result.path! };
+            return updated;
+          }
+          return [...prev, config];
+        });
+      }
+    } catch (err) {
+      console.error("Path resolution failed:", err);
+    } finally {
+      setResolving(false);
+    }
+  }, [codexCustomPath, claudeCustomPath, setExternalAgents]);
 
   // Add a new provider from preset
   const handleAddProvider = useCallback(
@@ -732,10 +1035,6 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
     [removeProvider, editingProviderId],
   );
 
-  // Provider options for default model select
-  const enabledProviders = providers.filter((p) => p.enabled);
-  const providerOptions = enabledProviders.map((p) => ({ value: p.id, label: p.name }));
-
   // Permission mode options
   const permissionModeOptions = [
     { value: "observer", label: "Observer - Read only, no actions" },
@@ -744,12 +1043,12 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
   ];
 
   // Agent options for default agent
-  const agentOptions = [
+  const agentOptions = useMemo(() => [
     { value: "catty", label: "Catty (Built-in)" },
     ...externalAgents
       .filter((a) => a.enabled)
       .map((a) => ({ value: a.id, label: a.name })),
-  ];
+  ], [externalAgents]);
 
   const hasOpenAiProviderKey = providers.some(
     (provider) => provider.providerId === "openai" && provider.enabled && !!provider.apiKey,
@@ -808,41 +1107,6 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
       window.clearInterval(intervalId);
     };
   }, [codexLoginSession, refreshCodexIntegration]);
-
-  // Add external agent
-  const handleAddAgent = useCallback(
-    (agent: ExternalAgentConfig) => {
-      setExternalAgents((prev) => [...prev, agent]);
-      setShowAddAgent(false);
-    },
-    [setExternalAgents],
-  );
-
-  const handleAddDiscoveredAgent = useCallback((agent: DiscoveredAgent) => {
-    const config = enableAgent(agent);
-    setExternalAgents((prev) => [...prev, config]);
-  }, [enableAgent, setExternalAgents]);
-
-  // Remove external agent
-  const handleRemoveAgent = useCallback(
-    (id: string) => {
-      setExternalAgents((prev) => prev.filter((a) => a.id !== id));
-      if (defaultAgentId === id) {
-        setDefaultAgentId("catty");
-      }
-    },
-    [setExternalAgents, defaultAgentId, setDefaultAgentId],
-  );
-
-  // Toggle agent enabled
-  const handleToggleAgent = useCallback(
-    (id: string, enabled: boolean) => {
-      setExternalAgents((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, enabled } : a)),
-      );
-    },
-    [setExternalAgents],
-  );
 
   const handleStartCodexLogin = useCallback(async () => {
     const bridge = getBridge();
@@ -944,58 +1208,45 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
                     key={provider.id}
                     provider={provider}
                     isActive={provider.id === activeProviderId}
-                    onToggleEnabled={(enabled) =>
-                      updateProvider(provider.id, { enabled })
-                    }
+                    onToggleEnabled={(enabled) => {
+                      if (enabled) {
+                        // Activate this provider, deactivate others
+                        setActiveProviderId(provider.id);
+                        if (provider.defaultModel) {
+                          setActiveModelId(provider.defaultModel);
+                        }
+                        // Ensure it's enabled
+                        if (!provider.enabled) {
+                          updateProvider(provider.id, { enabled: true });
+                        }
+                      } else {
+                        // Deactivate: clear active provider if this was it
+                        if (activeProviderId === provider.id) {
+                          setActiveProviderId("");
+                          setActiveModelId("");
+                        }
+                        updateProvider(provider.id, { enabled: false });
+                      }
+                    }}
                     onEdit={() =>
                       setEditingProviderId(
                         editingProviderId === provider.id ? null : provider.id,
                       )
                     }
                     onRemove={() => handleRemoveProvider(provider.id)}
-                    onUpdate={(updates) => updateProvider(provider.id, updates)}
+                    onUpdate={(updates) => {
+                      updateProvider(provider.id, updates);
+                      // If this is the active provider and model changed, update activeModelId
+                      if (provider.id === activeProviderId && updates.defaultModel !== undefined) {
+                        setActiveModelId(updates.defaultModel || "");
+                      }
+                    }}
                     isEditing={editingProviderId === provider.id}
                     onCancelEdit={() => setEditingProviderId(null)}
                   />
                 ))}
               </div>
             )}
-          </div>
-
-          {/* ── Default Model Section ── */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Bot size={18} className="text-muted-foreground" />
-              <h3 className="text-base font-medium">Default Model</h3>
-            </div>
-
-            <div className="bg-muted/30 rounded-lg p-4 space-y-1">
-              <SettingRow
-                label="Active Provider"
-                description="Select which AI provider to use by default"
-              >
-                <Select
-                  value={activeProviderId}
-                  options={providerOptions}
-                  onChange={setActiveProviderId}
-                  className="w-48"
-                  placeholder="None"
-                />
-              </SettingRow>
-
-              <SettingRow
-                label="Model"
-                description="Model identifier to use for AI requests"
-              >
-                <input
-                  type="text"
-                  value={activeModelId}
-                  onChange={(e) => setActiveModelId(e.target.value)}
-                  placeholder="e.g. gpt-4o"
-                  className="w-48 h-9 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                />
-              </SettingRow>
-            </div>
           </div>
 
           {/* ── Codex Section ── */}
@@ -1006,6 +1257,11 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
             </div>
 
             <CodexConnectionCard
+              pathInfo={codexPathInfo}
+              isResolvingPath={isDiscovering || isResolvingCodex}
+              customPath={codexCustomPath}
+              onCustomPathChange={setCodexCustomPath}
+              onRecheckPath={() => void handleCheckCustomPath("codex")}
               integration={codexIntegration}
               loginSession={codexLoginSession}
               isLoading={isCodexLoading}
@@ -1019,82 +1275,30 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
             />
           </div>
 
-          {/* ── External Agents Section ── */}
+          {/* ── Claude Code Section ── */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ScanSearch size={18} className="text-muted-foreground" />
-                <h3 className="text-base font-medium">External Agents</h3>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void rediscover()}
-                  disabled={isDiscovering}
-                  className="gap-1.5"
-                >
-                  <ScanSearch size={14} className={isDiscovering ? "animate-spin" : ""} />
-                  {isDiscovering ? "Scanning..." : "Scan for Agents"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowAddAgent(!showAddAgent)}
-                  className="gap-1.5"
-                >
-                  {showAddAgent ? <X size={14} /> : <Plus size={14} />}
-                  {showAddAgent ? "Cancel" : "Add Agent"}
-                </Button>
-              </div>
+            <div className="flex items-center gap-2">
+              <ProviderIconBadge providerId="claude" size="sm" />
+              <h3 className="text-base font-medium">Claude Code</h3>
             </div>
 
-            {showAddAgent && (
-              <AddAgentForm
-                onAdd={handleAddAgent}
-                onCancel={() => setShowAddAgent(false)}
-              />
-            )}
+            <ClaudeCodeCard
+              pathInfo={claudePathInfo}
+              isResolvingPath={isDiscovering || isResolvingClaude}
+              customPath={claudeCustomPath}
+              onCustomPathChange={setClaudeCustomPath}
+              onRecheckPath={() => void handleCheckCustomPath("claude")}
+            />
+          </div>
 
-            {unconfiguredAgents.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Detected on this machine
-                </div>
-                {unconfiguredAgents.map((agent) => (
-                  <DetectedAgentCard
-                    key={`${agent.command}:${agent.path}`}
-                    agent={agent}
-                    onAdd={() => handleAddDiscoveredAgent(agent)}
-                  />
-                ))}
+          {/* ── Default Agent Section ── */}
+          {agentOptions.length > 1 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Bot size={18} className="text-muted-foreground" />
+                <h3 className="text-base font-medium">Default Agent</h3>
               </div>
-            )}
 
-            {externalAgents.length === 0 && unconfiguredAgents.length === 0 && !showAddAgent ? (
-              <div className="rounded-lg border border-dashed border-border/60 p-6 text-center">
-                <ScanSearch size={24} className="mx-auto text-muted-foreground mb-2" />
-                <p className="text-sm text-muted-foreground">
-                  No external agents configured. Scan for agents or add one manually.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {externalAgents.map((agent) => (
-                  <ExternalAgentCard
-                    key={agent.id}
-                    agent={agent}
-                    isDefault={agent.id === defaultAgentId}
-                    onToggleEnabled={(enabled) => handleToggleAgent(agent.id, enabled)}
-                    onSetDefault={() => setDefaultAgentId(agent.id)}
-                    onRemove={() => handleRemoveAgent(agent.id)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* Default Agent selection */}
-            {agentOptions.length > 1 && (
               <div className="bg-muted/30 rounded-lg p-4">
                 <SettingRow
                   label="Default Agent"
@@ -1108,8 +1312,8 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
                   />
                 </SettingRow>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* ── Safety Section ── */}
           <div className="space-y-4">

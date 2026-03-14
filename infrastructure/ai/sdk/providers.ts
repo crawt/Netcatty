@@ -198,11 +198,12 @@ export function createModelFromConfig(config: ProviderConfig) {
 
   switch (config.providerId) {
     case 'openai':
+      // Use .chat() to force Chat Completions API (not Responses API)
       return createOpenAI({
         apiKey: config.apiKey,
         baseURL: config.baseURL,
         fetch: customFetch,
-      })(modelId);
+      }).chat(modelId);
 
     case 'anthropic':
       return createAnthropic({
@@ -219,25 +220,27 @@ export function createModelFromConfig(config: ProviderConfig) {
       })(modelId);
 
     case 'ollama':
-      // Ollama uses OpenAI-compatible API
+      // Ollama uses OpenAI-compatible Chat Completions API
       return createOpenAI({
         apiKey: 'ollama',
         baseURL: config.baseURL || 'http://localhost:11434/v1',
         fetch: customFetch,
-      })(modelId);
+      }).chat(modelId);
 
     case 'openrouter':
+      // OpenRouter uses OpenAI-compatible Chat Completions API
       return createOpenAI({
         apiKey: config.apiKey,
         baseURL: config.baseURL || 'https://openrouter.ai/api/v1',
         fetch: customFetch,
-      })(modelId);
+      }).chat(modelId);
 
     case 'custom':
+      // Custom providers use OpenAI-compatible Chat Completions API
       return createOpenAI({
         apiKey: config.apiKey,
         baseURL: config.baseURL,
         fetch: customFetch,
-      })(modelId);
+      }).chat(modelId);
   }
 }

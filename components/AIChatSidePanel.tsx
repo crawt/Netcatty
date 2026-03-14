@@ -591,20 +591,50 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
       permissionMode: globalPermissionMode,
     });
 
+    // Decrypt API key before passing to SDK
+    let decryptedApiKey = activeProvider.apiKey;
+    if (decryptedApiKey && bridge?.credentialsDecrypt) {
+      try {
+        decryptedApiKey = await (bridge as { credentialsDecrypt: (v: string) => Promise<string> }).credentialsDecrypt(decryptedApiKey) ?? decryptedApiKey;
+      } catch (e) {
+        console.warn('[Catty] API key decryption failed:', e);
+      }
+    }
+
+    console.log('[Catty] Creating model:', {
+      providerId: activeProvider.providerId,
+      baseURL: activeProvider.baseURL,
+      hasApiKey: !!decryptedApiKey,
+      model: activeModelId || activeProvider.defaultModel || '',
+    });
+
     const model = createModelFromConfig({
       ...activeProvider,
+      apiKey: decryptedApiKey,
       defaultModel: activeModelId || activeProvider.defaultModel || '',
     });
 
     try {
-      // Build message array for the SDK
-      const sdkMessages = (currentSession?.messages ?? [])
-        .filter(m => m.role !== 'system')
-        .map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        }));
+      // Build message array for the SDK.
+      // Only include user and assistant TEXT messages — tool call/result
+      // history is managed internally by each streamText invocation.
+      const sdkMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+      for (const m of (currentSession?.messages ?? [])) {
+        if (m.role === 'user') {
+          sdkMessages.push({ role: 'user', content: m.content });
+        } else if (m.role === 'assistant' && m.content) {
+          sdkMessages.push({ role: 'assistant', content: m.content });
+        }
+        // Skip tool messages and empty assistant messages (tool-call-only)
+      }
       sdkMessages.push({ role: 'user', content: trimmed });
+
+      console.log('[Catty] streamText request:', {
+        modelId: model.modelId,
+        messageCount: sdkMessages.length,
+        hasTools: Object.keys(tools).length,
+        systemPromptLength: systemPrompt.length,
+      });
 
       const result = streamText({
         model,
@@ -615,42 +645,103 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
         abortSignal: abortController.signal,
       });
 
-      // Stream the response
-      for await (const chunk of result.fullStream) {
+      // Stream the response using getReader() to avoid Electron stream hanging issues
+      let chunkIndex = 0;
+      // Track last message role locally (React state is stale in async closures)
+      let lastAddedRole: 'assistant' | 'tool' = 'assistant';
+      const reader = result.fullStream.getReader();
+      while (true) {
+        const { done, value: chunk } = await reader.read();
+        if (done) break;
+        if (chunkIndex < 10) {
+          console.log(`[Catty] chunk[${chunkIndex}]:`, JSON.stringify(chunk).slice(0, 200));
+        }
+        chunkIndex++;
         switch (chunk.type) {
-          case 'text-delta':
-            updateLastMessage(sessionId!, msg => ({
-              ...msg,
-              content: msg.content + chunk.textDelta,
-            }));
+          case 'text':
+          case 'text-delta': {
+            const text = (chunk as unknown as { text?: string; textDelta?: string }).text
+              ?? (chunk as unknown as { textDelta?: string }).textDelta;
+            if (text) {
+              // If last message was a tool result, create a new assistant message first
+              if (lastAddedRole === 'tool') {
+                addMessageToSession(sessionId!, {
+                  id: generateId(),
+                  role: 'assistant',
+                  content: '',
+                  timestamp: Date.now(),
+                });
+                lastAddedRole = 'assistant';
+              }
+              updateLastMessage(sessionId!, msg => ({
+                ...msg,
+                content: msg.content + text,
+              }));
+            }
+            break;
+          }
+          case 'reasoning':
+          case 'reasoning-start':
+          case 'reasoning-delta': {
+            const rText = (chunk as unknown as { text?: string }).text;
+            if (rText) {
+              if (lastAddedRole === 'tool') {
+                addMessageToSession(sessionId!, {
+                  id: generateId(),
+                  role: 'assistant',
+                  content: '',
+                  timestamp: Date.now(),
+                });
+                lastAddedRole = 'assistant';
+              }
+              updateLastMessage(sessionId!, msg => ({
+                ...msg,
+                thinking: (msg.thinking || '') + rText,
+              }));
+            }
+            break;
+          }
+          case 'reasoning-end':
+          case 'text-start':
+          case 'text-end':
+          case 'start':
+          case 'finish':
+          case 'start-step':
+          case 'finish-step':
+            // Lifecycle events, no action needed
             break;
           case 'tool-call':
+            console.log(`[Catty] tool-call: ${chunk.toolName}`);
             updateLastMessage(sessionId!, msg => ({
               ...msg,
               toolCalls: [...(msg.toolCalls || []), {
                 id: chunk.toolCallId,
                 name: chunk.toolName,
-                arguments: chunk.args,
+                arguments: (chunk as unknown as { input?: unknown; args?: unknown }).input ?? (chunk as unknown as { args?: unknown }).args,
               }],
               executionStatus: 'running',
             }));
             break;
-          case 'tool-result':
+          case 'tool-result': {
+            const toolOutput = (chunk as unknown as { output?: unknown; result?: unknown }).output ?? (chunk as unknown as { result?: unknown }).result;
+            console.log(`[Catty] tool-result: ${chunk.toolCallId}`);
             addMessageToSession(sessionId!, {
               id: generateId(),
               role: 'tool',
               content: '',
               toolResults: [{
                 toolCallId: chunk.toolCallId,
-                content: typeof chunk.result === 'string'
-                  ? chunk.result
-                  : JSON.stringify(chunk.result),
+                content: typeof toolOutput === 'string'
+                  ? toolOutput
+                  : JSON.stringify(toolOutput),
                 isError: false,
               }],
               timestamp: Date.now(),
               executionStatus: 'completed',
             });
+            lastAddedRole = 'tool';
             break;
+          }
           case 'error':
             updateLastMessage(sessionId!, msg => ({
               ...msg,
@@ -658,9 +749,14 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
               executionStatus: 'failed',
             }));
             break;
+          default:
+            // tool-input-start/delta/end and other unknown types
+            break;
         }
       }
+      console.log(`[Catty] stream finished, total chunks: ${chunkIndex}`);
     } catch (err) {
+      console.error('[Catty] streamText error:', err);
       if (!abortController.signal.aborted) {
         updateLastMessage(sessionId!, msg => ({
           ...msg,

@@ -1007,6 +1007,9 @@ const api = {
   aiDiscoverAgents: async () => {
     return ipcRenderer.invoke("netcatty:ai:agents:discover");
   },
+  aiResolveCli: async (params) => {
+    return ipcRenderer.invoke("netcatty:ai:resolve-cli", params);
+  },
   aiCodexGetIntegration: async () => {
     return ipcRenderer.invoke("netcatty:ai:codex:get-integration");
   },

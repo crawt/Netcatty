@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { localStorageAdapter } from '../../infrastructure/persistence/localStorageAdapter';
 import {
   STORAGE_KEY_AI_PROVIDERS,
@@ -129,6 +129,45 @@ export function useAIState() {
   const setMaxIterations = useCallback((value: number) => {
     setMaxIterationsRaw(value);
     localStorageAdapter.writeNumber(STORAGE_KEY_AI_MAX_ITERATIONS, value);
+  }, []);
+
+  // ── Cross-window sync via storage events ──
+  // When the settings window updates localStorage, the main window picks up changes.
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      switch (e.key) {
+        case STORAGE_KEY_AI_PROVIDERS:
+          setProvidersRaw(localStorageAdapter.read<ProviderConfig[]>(STORAGE_KEY_AI_PROVIDERS) ?? []);
+          break;
+        case STORAGE_KEY_AI_ACTIVE_PROVIDER:
+          setActiveProviderIdRaw(localStorageAdapter.readString(STORAGE_KEY_AI_ACTIVE_PROVIDER) ?? '');
+          break;
+        case STORAGE_KEY_AI_ACTIVE_MODEL:
+          setActiveModelIdRaw(localStorageAdapter.readString(STORAGE_KEY_AI_ACTIVE_MODEL) ?? '');
+          break;
+        case STORAGE_KEY_AI_PERMISSION_MODE: {
+          const mode = localStorageAdapter.readString(STORAGE_KEY_AI_PERMISSION_MODE);
+          if (mode === 'observer' || mode === 'confirm' || mode === 'autonomous') {
+            setGlobalPermissionModeRaw(mode);
+          }
+          break;
+        }
+        case STORAGE_KEY_AI_EXTERNAL_AGENTS:
+          setExternalAgentsRaw(localStorageAdapter.read<ExternalAgentConfig[]>(STORAGE_KEY_AI_EXTERNAL_AGENTS) ?? []);
+          break;
+        case STORAGE_KEY_AI_DEFAULT_AGENT:
+          setDefaultAgentIdRaw(localStorageAdapter.readString(STORAGE_KEY_AI_DEFAULT_AGENT) ?? 'catty');
+          break;
+        case STORAGE_KEY_AI_COMMAND_TIMEOUT:
+          setCommandTimeoutRaw(localStorageAdapter.readNumber(STORAGE_KEY_AI_COMMAND_TIMEOUT) ?? 60);
+          break;
+        case STORAGE_KEY_AI_MAX_ITERATIONS:
+          setMaxIterationsRaw(localStorageAdapter.readNumber(STORAGE_KEY_AI_MAX_ITERATIONS) ?? 20);
+          break;
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
   // ── Session CRUD ──

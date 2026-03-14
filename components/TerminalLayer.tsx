@@ -922,6 +922,7 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
 
   // AI Chat state
   const aiState = useAIState();
+  const { cleanupOrphanedSessions } = aiState;
 
   // On mount: clean up orphaned AI sessions after a short delay
   // (allows sessions/workspaces to fully initialize)
@@ -933,8 +934,8 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
     const activeIds = new Set<string>();
     for (const s of sessions) activeIds.add(s.id);
     for (const w of workspaces) activeIds.add(w.id);
-    aiState.cleanupOrphanedSessions(activeIds);
-  }, [sessions, workspaces, aiState.cleanupOrphanedSessions]);
+    cleanupOrphanedSessions(activeIds);
+  }, [sessions, workspaces, cleanupOrphanedSessions]);
 
   // Build terminal session context for the AI chat panel
   const aiTerminalSessions = useMemo(() => {

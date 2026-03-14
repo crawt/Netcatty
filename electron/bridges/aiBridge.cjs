@@ -455,6 +455,86 @@ function streamRequest(url, options, event, requestId) {
   });
 }
 
+/**
+ * Execute command through the terminal PTY stream (visible in terminal).
+ * Uses unique markers to detect when the command finishes and capture output.
+ * Same approach as MCP server's execViaPty.
+ */
+function execViaPtyForCatty(ptyStream, command) {
+  const marker = `__NCMCP_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}__`;
+
+  return new Promise((resolve) => {
+    let output = "";
+    let foundStart = false;
+    let timeoutId = null;
+
+    const MAX_TIMEOUT = 300000; // 5 min
+
+    const onData = (data) => {
+      const text = data.toString();
+
+      if (!foundStart) {
+        const startIdx = text.indexOf(marker + "_S");
+        if (startIdx !== -1) {
+          foundStart = true;
+          const afterMarker = text.slice(startIdx);
+          const nlIdx = afterMarker.indexOf("\n");
+          if (nlIdx !== -1) {
+            output += afterMarker.slice(nlIdx + 1);
+          }
+        }
+        if (foundStart) checkEnd();
+        return;
+      }
+
+      output += text;
+      checkEnd();
+    };
+
+    function checkEnd() {
+      const endPattern = marker + "_E:";
+      const endIdx = output.indexOf(endPattern);
+      if (endIdx === -1) return;
+
+      const afterEnd = output.slice(endIdx + endPattern.length);
+      const codeMatch = afterEnd.match(/^(\d+)/);
+      const exitCode = codeMatch ? parseInt(codeMatch[1], 10) : null;
+
+      const stdout = output.slice(0, endIdx);
+      finish(stdout, exitCode);
+    }
+
+    function finish(stdout, exitCode) {
+      clearTimeout(timeoutId);
+      ptyStream.removeListener("data", onData);
+      // Strip ANSI codes and any leaked MCP markers
+      let cleaned = stripAnsi(stdout || "").trim();
+      cleaned = cleaned.replace(/__NCMCP_[^\r\n]*[\r\n]*/g, "").trim();
+      resolve({
+        ok: exitCode === 0 || exitCode === null,
+        stdout: cleaned,
+        stderr: "",
+        exitCode: exitCode ?? 0,
+      });
+    }
+
+    timeoutId = setTimeout(() => {
+      ptyStream.removeListener("data", onData);
+      if (typeof ptyStream.write === "function") ptyStream.write("\x03");
+      const cleaned = stripAnsi(output).trim();
+      resolve({ ok: false, stdout: cleaned, stderr: "", exitCode: -1, error: "Command timed out (5min)" });
+    }, MAX_TIMEOUT);
+
+    ptyStream.on("data", onData);
+
+    const noPager = "PAGER=cat SYSTEMD_PAGER= GIT_PAGER=cat LESS= ";
+    ptyStream.write(
+      `printf '${marker}_S\\n';${noPager}${command}\n` +
+      `__nc=$?;printf '${marker}_E:'$__nc'\\n';(exit $__nc)\n`
+    );
+  });
+}
+
 function registerHandlers(ipcMain) {
   // Start a streaming chat request (proxied through main process)
   ipcMain.handle("netcatty:ai:chat:stream", async (event, { requestId, url, headers, body }) => {
@@ -514,6 +594,8 @@ function registerHandlers(ipcMain) {
   });
 
   // Execute a command on a terminal session (for Catty Agent)
+  // Uses PTY-based execution so commands are visible in the terminal,
+  // matching the MCP server approach with start/end markers.
   ipcMain.handle("netcatty:ai:exec", async (_event, { sessionId, command }) => {
     const session = sessions?.get(sessionId);
     if (!session) {
@@ -521,10 +603,17 @@ function registerHandlers(ipcMain) {
     }
 
     try {
-      // Use SSH exec for remote sessions
-      if (session.sshClient) {
+      // Prefer PTY stream (visible in terminal) — same approach as MCP server
+      const ptyStream = session.stream || session.pty;
+      if (ptyStream && typeof ptyStream.write === "function") {
+        return execViaPtyForCatty(ptyStream, command);
+      }
+
+      // Fallback: SSH exec channel (invisible to terminal)
+      const sshClient = session.sshClient || session.conn;
+      if (sshClient && typeof sshClient.exec === "function") {
         return new Promise((resolve) => {
-          session.sshClient.exec(command, (err, stream) => {
+          sshClient.exec(command, (err, stream) => {
             if (err) {
               resolve({ ok: false, error: err.message });
               return;
@@ -540,8 +629,7 @@ function registerHandlers(ipcMain) {
         });
       }
 
-      // For local sessions, we can't easily exec - return info about session type
-      return { ok: false, error: "Command execution only supported for SSH sessions" };
+      return { ok: false, error: "No terminal stream or SSH client available for this session" };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }
@@ -918,15 +1006,6 @@ function registerHandlers(ipcMain) {
         acpArgs: [],
         args: ["exec", "--full-auto", "--json", "{prompt}"],
       },
-      {
-        command: "gemini",
-        name: "Gemini CLI",
-        icon: "gemini",
-        description: "Google's Gemini CLI agent",
-        acpCommand: "gemini",
-        acpArgs: ["--experimental-acp"],
-        args: ["{prompt}"],
-      },
     ];
 
     const shellEnv = await getShellEnv();
@@ -975,6 +1054,35 @@ function registerHandlers(ipcMain) {
     }
 
     return agents;
+  });
+
+  // Resolve a CLI binary path (auto-detect or validate custom path)
+  ipcMain.handle("netcatty:ai:resolve-cli", async (_event, { command, customPath }) => {
+    const shellEnv = await getShellEnv();
+    let resolvedPath = null;
+
+    if (customPath) {
+      // User provided a custom path – validate it exists
+      if (existsSync(customPath)) {
+        resolvedPath = customPath;
+      }
+    } else {
+      resolvedPath = resolveCliFromPath(command, shellEnv);
+    }
+
+    if (!resolvedPath) {
+      return { path: null, version: null, available: false };
+    }
+
+    let version = "";
+    try {
+      const result = await runCommand(resolvedPath, ["--version"], { env: shellEnv });
+      version = (result.stdout || result.stderr || "").trim().split("\n")[0];
+    } catch {
+      version = "";
+    }
+
+    return { path: resolvedPath, version, available: true };
   });
 
   ipcMain.handle("netcatty:ai:codex:get-integration", async () => {
