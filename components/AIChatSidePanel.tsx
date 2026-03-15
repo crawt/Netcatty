@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { streamText, stepCountIs } from 'ai';
 import { cn } from '../lib/utils';
 import { useI18n } from '../application/i18n/I18nProvider';
+import { PermissionDialog } from './ai/PermissionDialog';
 import { useWindowControls } from '../application/state/useWindowControls';
 import { useImageUpload } from '../application/state/useImageUpload';
 import type {
@@ -163,6 +164,12 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
 
   // Per-scope abort controllers
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+
+  // Permission dialog state for confirm mode
+  const [pendingApproval, setPendingApproval] = useState<{
+    toolCall: { name: string; arguments: Record<string, unknown> };
+  } | null>(null);
+  const approvalResolverRef = useRef<((approved: boolean) => void) | null>(null);
 
   const { images, addImages, removeImage, clearImages } = useImageUpload();
   const { openSettingsWindow } = useWindowControls();
@@ -718,6 +725,41 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
             lastAddedRole = 'tool';
             break;
           }
+          case 'tool-approval-request': {
+            const approvalChunk = chunk as unknown as {
+              approvalId: string;
+              toolCallId: string;
+              toolCall: { toolName: string; input: Record<string, unknown> };
+            };
+            console.log(`[Catty] tool-approval-request: ${approvalChunk.toolCall.toolName}`, approvalChunk.approvalId);
+
+            // Show PermissionDialog and wait for user response
+            const approved = await new Promise<boolean>((resolve) => {
+              approvalResolverRef.current = resolve;
+              setPendingApproval({
+                toolCall: {
+                  name: approvalChunk.toolCall.toolName,
+                  arguments: approvalChunk.toolCall.input || {},
+                },
+              });
+            });
+            setPendingApproval(null);
+            approvalResolverRef.current = null;
+
+            if (!approved) {
+              // User rejected — add a denial message and stop
+              updateLastMessage(sessionId!, msg => ({
+                ...msg,
+                content: msg.content + (msg.content ? '\n\n' : '') + t('ai.chat.toolDenied'),
+                executionStatus: 'completed',
+              }));
+            }
+            // Note: whether approved or denied, the stream has already ended for this step.
+            // The SDK requires a new streamText call with approval response in messages
+            // to continue. For now, we show the result — full multi-turn approval loop
+            // can be added later.
+            break;
+          }
           case 'error':
             updateLastMessage(sessionId!, msg => ({
               ...msg,
@@ -726,7 +768,7 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
             }));
             break;
           default:
-            // tool-input-start/delta/end and other unknown types
+            // tool-input-start/delta/end, tool-output-denied, and other types
             break;
         }
       }
@@ -952,6 +994,16 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
           />
         </>
       )}
+
+      {/* Permission approval dialog for confirm mode */}
+      <PermissionDialog
+        open={!!pendingApproval}
+        toolCall={pendingApproval?.toolCall ?? null}
+        recommendation="confirm"
+        onApprove={() => approvalResolverRef.current?.(true)}
+        onReject={() => approvalResolverRef.current?.(false)}
+        onDismiss={() => approvalResolverRef.current?.(false)}
+      />
     </div>
   );
 };

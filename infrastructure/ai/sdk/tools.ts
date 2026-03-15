@@ -1,14 +1,20 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { NetcattyBridge, ExecutorContext } from '../cattyAgent/executor';
-import { checkCommandSafety, checkToolPermission } from '../cattyAgent/safety';
+import { checkCommandSafety } from '../cattyAgent/safety';
 import type { AIPermissionMode } from '../types';
+
+/** Read-only tools that never need approval */
+const READ_ONLY_TOOLS = new Set([
+  'terminal_read_output',
+  'workspace_get_info',
+  'workspace_get_session_info',
+  'sftp_list_directory',
+  'sftp_read_file',
+]);
 
 /**
  * Create Catty Agent tools using the Vercel AI SDK `tool()` helper with zod schemas.
- *
- * Each tool mirrors the original implementation in `cattyAgent/executor.ts` but uses
- * the SDK's declarative format with zod parameter schemas and `execute` functions.
  *
  * @param bridge  - The Electron IPC bridge for executing operations
  * @param context - Workspace/session context available to the agent
@@ -21,6 +27,13 @@ export function createCattyTools(
   commandBlocklist?: string[],
   permissionMode: AIPermissionMode = 'confirm',
 ) {
+  /**
+   * Determines if a tool needs user approval before execution.
+   * - observer: all write tools are blocked at MCP Server level, no approval needed here
+   * - confirm: write tools need approval via PermissionDialog
+   * - autonomous: no approval needed
+   */
+  const writeToolNeedsApproval = permissionMode === 'confirm';
   return {
     terminal_execute: tool({
       description:
@@ -30,14 +43,12 @@ export function createCattyTools(
         sessionId: z.string().describe('The terminal session ID to execute the command on.'),
         command: z.string().describe('The shell command to execute on the remote host.'),
       }),
+      needsApproval: writeToolNeedsApproval,
       execute: async ({ sessionId, command }) => {
-        // Permission check
-        const permission = checkToolPermission('terminal_execute', { command }, {
-          permissionMode,
-          commandBlocklist,
-        });
-        if (permission === 'deny') {
-          return { error: `Operation denied by permission mode "${permissionMode}".` };
+        // Blocklist check (observer mode is blocked at MCP Server level)
+        const safety = checkCommandSafety(command, commandBlocklist);
+        if (safety.blocked) {
+          return { error: `Command blocked by safety policy. Matched pattern: ${safety.matchedPattern}` };
         }
 
         const result = await bridge.aiExec(sessionId, command);
@@ -88,12 +99,8 @@ export function createCattyTools(
               '(e.g. "\\x03" for ctrl+c, "\\n" for enter).',
           ),
       }),
+      needsApproval: writeToolNeedsApproval,
       execute: async ({ sessionId, input }) => {
-        const permission = checkToolPermission('terminal_send_input', { input }, { permissionMode });
-        if (permission === 'deny') {
-          return { error: `Operation denied by permission mode "${permissionMode}".` };
-        }
-
         const result = await bridge.aiTerminalWrite(sessionId, input);
         if (!result.ok) {
           return { error: result.error || 'Failed to send input' };
@@ -162,12 +169,8 @@ export function createCattyTools(
         path: z.string().describe('The absolute path of the remote file to write.'),
         content: z.string().describe('The text content to write to the file.'),
       }),
+      needsApproval: writeToolNeedsApproval,
       execute: async ({ sessionId, path, content }) => {
-        const permission = checkToolPermission('sftp_write_file', { path, content }, { permissionMode });
-        if (permission === 'deny') {
-          return { error: `Operation denied by permission mode "${permissionMode}".` };
-        }
-
         const session = context.sessions.find((s) => s.sessionId === sessionId);
         if (!session?.sftpId) {
           // Fallback: use terminal exec with heredoc
@@ -250,14 +253,12 @@ export function createCattyTools(
               'when a command fails. Defaults to false.',
           ),
       }),
+      needsApproval: writeToolNeedsApproval,
       execute: async ({ sessionIds, command, mode, stopOnError }) => {
-        // Permission check
-        const permission = checkToolPermission('multi_host_execute', { command }, {
-          permissionMode,
-          commandBlocklist,
-        });
-        if (permission === 'deny') {
-          return { error: `Operation denied by permission mode "${permissionMode}".` };
+        // Blocklist check
+        const safety = checkCommandSafety(command, commandBlocklist);
+        if (safety.blocked) {
+          return { error: `Command blocked by safety policy. Matched pattern: ${safety.matchedPattern}` };
         }
 
         const results: Record<string, { ok: boolean; output: string }> = {};
