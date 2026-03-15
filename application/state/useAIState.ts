@@ -12,6 +12,7 @@ import {
   STORAGE_KEY_AI_COMMAND_TIMEOUT,
   STORAGE_KEY_AI_MAX_ITERATIONS,
   STORAGE_KEY_AI_SESSIONS,
+  STORAGE_KEY_AI_AGENT_MODEL_MAP,
 } from '../../infrastructure/config/storageKeys';
 import type {
   AISession,
@@ -72,8 +73,21 @@ export function useAIState() {
   // Per-scope active session: keyed by `${scopeType}:${scopeTargetId}`
   const [activeSessionIdMap, setActiveSessionIdMapRaw] = useState<Record<string, string | null>>({});
 
+  // Per-agent model selection: remembers last selected model per agent
+  const [agentModelMap, setAgentModelMapRaw] = useState<Record<string, string>>(() =>
+    localStorageAdapter.read<Record<string, string>>(STORAGE_KEY_AI_AGENT_MODEL_MAP) ?? {}
+  );
+
   const setActiveSessionId = useCallback((scopeKey: string, id: string | null) => {
     setActiveSessionIdMapRaw(prev => ({ ...prev, [scopeKey]: id }));
+  }, []);
+
+  const setAgentModel = useCallback((agentId: string, modelId: string) => {
+    setAgentModelMapRaw(prev => {
+      const next = { ...prev, [agentId]: modelId };
+      localStorageAdapter.write(STORAGE_KEY_AI_AGENT_MODEL_MAP, next);
+      return next;
+    });
   }, []);
 
   // ── Persist helpers ──
@@ -343,6 +357,10 @@ export function useAIState() {
     setCommandTimeout,
     maxIterations,
     setMaxIterations,
+
+    // Per-agent model memory
+    agentModelMap,
+    setAgentModel,
 
     // Sessions (per-scope active session)
     sessions,

@@ -66,6 +66,8 @@ interface AIChatSidePanelProps {
   defaultAgentId: string;
   externalAgents: ExternalAgentConfig[];
   setExternalAgents?: (value: ExternalAgentConfig[] | ((prev: ExternalAgentConfig[]) => ExternalAgentConfig[])) => void;
+  agentModelMap: Record<string, string>;
+  setAgentModel: (agentId: string, modelId: string) => void;
 
   // Permission
   globalPermissionMode: AIPermissionMode;
@@ -119,6 +121,8 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
   defaultAgentId,
   externalAgents,
   setExternalAgents,
+  agentModelMap,
+  setAgentModel,
   globalPermissionMode,
   commandBlocklist,
   scopeType,
@@ -152,7 +156,6 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
 
   const [showHistory, setShowHistory] = useState(false);
   const [currentAgentId, setCurrentAgentId] = useState(defaultAgentId);
-  const [selectedAgentModel, setSelectedAgentModel] = useState<string | undefined>(undefined);
 
   // Per-scope abort controllers
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
@@ -227,6 +230,20 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
     () => getAgentModelPresets(currentAgentConfig?.command),
     [currentAgentConfig?.command],
   );
+
+  // Per-agent model: recall last selection or use first preset as default
+  const selectedAgentModel = useMemo(() => {
+    const stored = agentModelMap[currentAgentId];
+    if (stored && agentModelPresets.some(p => stored === p.id || stored.startsWith(p.id + '/'))) {
+      return stored;
+    }
+    // Default to first preset if available
+    return agentModelPresets.length > 0 ? agentModelPresets[0].id : undefined;
+  }, [currentAgentId, agentModelMap, agentModelPresets]);
+
+  const handleAgentModelSelect = useCallback((modelId: string) => {
+    setAgentModel(currentAgentId, modelId);
+  }, [currentAgentId, setAgentModel]);
 
   // Filtered sessions for history (matching current scope type)
   const historySessions = useMemo(
@@ -907,7 +924,7 @@ const AIChatSidePanelInner: React.FC<AIChatSidePanelProps> = ({
             agentName={currentAgentId === 'catty' ? 'Catty Agent' : externalAgents.find(a => a.id === currentAgentId)?.name}
             modelPresets={agentModelPresets}
             selectedModelId={selectedAgentModel}
-            onModelSelect={setSelectedAgentModel}
+            onModelSelect={handleAgentModelSelect}
             images={images}
             onAddImages={addImages}
             onRemoveImage={removeImage}

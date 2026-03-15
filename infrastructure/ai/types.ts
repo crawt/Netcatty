@@ -211,8 +211,8 @@ export interface AgentModelPreset {
 }
 
 export const CLAUDE_MODEL_PRESETS: AgentModelPreset[] = [
-  { id: 'opus', name: 'Opus 4.6', description: 'Most powerful' },
-  { id: 'sonnet', name: 'Sonnet 4.6', description: 'Fast & capable' },
+  { id: 'default', name: 'Opus 4.6', description: 'Recommended' },
+  { id: 'sonnet', name: 'Sonnet 4.6', description: 'Everyday tasks' },
   { id: 'haiku', name: 'Haiku 4.5', description: 'Fastest' },
 ];
 
