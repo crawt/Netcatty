@@ -55,6 +55,8 @@ interface SettingsSystemTabProps {
   closeToTray: boolean;
   setCloseToTray: (enabled: boolean) => void;
   hotkeyRegistrationError: string | null;
+  globalHotkeyEnabled: boolean;
+  setGlobalHotkeyEnabled: (enabled: boolean) => void;
   // Unified update state — from useUpdateCheck hook in SettingsPageContent
   updateState: UpdateState;
   checkNow: () => Promise<unknown>;
@@ -74,6 +76,8 @@ const SettingsSystemTab: React.FC<SettingsSystemTabProps> = ({
   closeToTray,
   setCloseToTray,
   hotkeyRegistrationError,
+  globalHotkeyEnabled,
+  setGlobalHotkeyEnabled,
   updateState,
   checkNow,
   installUpdate,
@@ -599,42 +603,55 @@ const SettingsSystemTab: React.FC<SettingsSystemTabProps> = ({
             </div>
 
             <div className="bg-muted/30 rounded-lg p-4 space-y-4">
-              {/* Toggle Window Hotkey */}
+              {/* Enable/Disable Global Hotkey */}
               <SettingRow
-                label={t("settings.globalHotkey.toggleWindow")}
-                description={t("settings.globalHotkey.toggleWindowDesc")}
+                label={t('settings.globalHotkey.enabled')}
+                description={t('settings.globalHotkey.enabledDesc')}
               >
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsRecordingHotkey(true);
-                    }}
-                    className={cn(
-                      "px-3 py-1.5 text-sm font-mono rounded border transition-colors min-w-[100px] text-center",
-                      isRecordingHotkey
-                        ? "border-primary bg-primary/10 animate-pulse"
-                        : "border-border hover:border-primary/50",
-                    )}
-                  >
-                    {isRecordingHotkey
-                      ? t("settings.shortcuts.recording")
-                      : toggleWindowHotkey || t("settings.globalHotkey.notSet")}
-                  </button>
-                  {toggleWindowHotkey && (
-                    <button
-                      onClick={handleResetHotkey}
-                      className="p-1 hover:bg-muted rounded"
-                      title={t("settings.globalHotkey.reset")}
-                    >
-                      <RotateCcw size={14} />
-                    </button>
-                  )}
-                </div>
+                <Toggle
+                  checked={globalHotkeyEnabled}
+                  onChange={setGlobalHotkeyEnabled}
+                />
               </SettingRow>
-              {(hotkeyError || hotkeyRegistrationError) && (
-                <p className="text-sm text-destructive">{hotkeyError || hotkeyRegistrationError}</p>
-              )}
+
+              <div className={cn(!globalHotkeyEnabled && "opacity-50 pointer-events-none")}>
+                {/* Toggle Window Hotkey */}
+                <SettingRow
+                  label={t("settings.globalHotkey.toggleWindow")}
+                  description={t("settings.globalHotkey.toggleWindowDesc")}
+                >
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsRecordingHotkey(true);
+                      }}
+                      className={cn(
+                        "px-3 py-1.5 text-sm font-mono rounded border transition-colors min-w-[100px] text-center",
+                        isRecordingHotkey
+                          ? "border-primary bg-primary/10 animate-pulse"
+                          : "border-border hover:border-primary/50",
+                      )}
+                    >
+                      {isRecordingHotkey
+                        ? t("settings.shortcuts.recording")
+                        : toggleWindowHotkey || t("settings.globalHotkey.notSet")}
+                    </button>
+                    {toggleWindowHotkey && (
+                      <button
+                        onClick={handleResetHotkey}
+                        className="p-1 hover:bg-muted rounded"
+                        title={t("settings.globalHotkey.reset")}
+                      >
+                        <RotateCcw size={14} />
+                      </button>
+                    )}
+                  </div>
+                </SettingRow>
+                {(hotkeyError || hotkeyRegistrationError) && (
+                  <p className="text-sm text-destructive mt-2">{hotkeyError || hotkeyRegistrationError}</p>
+                )}
+              </div>
 
               {/* Close to Tray */}
               <SettingRow

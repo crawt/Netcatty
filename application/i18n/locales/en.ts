@@ -142,6 +142,8 @@ const en: Messages = {
   'settings.globalHotkey.reset': 'Reset to default',
   'settings.globalHotkey.closeToTray': 'Close to System Tray',
   'settings.globalHotkey.closeToTrayDesc': 'When enabled, closing the window will minimize to the system tray instead of quitting.',
+  'settings.globalHotkey.enabled': 'Enable Global Hotkey',
+  'settings.globalHotkey.enabledDesc': 'Register system-wide keyboard shortcuts. When disabled, all global hotkeys are unregistered.',
   'settings.globalHotkey.hint': 'Global hotkey works system-wide to quickly show or hide the window (Quake-style terminal).',
 
   // Tray Panel

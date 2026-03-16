@@ -27,6 +27,7 @@ import {
   STORAGE_KEY_SESSION_LOGS_FORMAT,
   STORAGE_KEY_TOGGLE_WINDOW_HOTKEY,
   STORAGE_KEY_CLOSE_TO_TRAY,
+  STORAGE_KEY_GLOBAL_HOTKEY_ENABLED,
 } from '../../infrastructure/config/storageKeys';
 import { DEFAULT_UI_LOCALE, resolveSupportedLocale } from '../../infrastructure/config/i18n';
 import { TERMINAL_THEMES } from '../../infrastructure/config/terminalThemes';
@@ -265,6 +266,11 @@ export const useSettingsState = () => {
     return stored === 'true';
   });
   const [hotkeyRegistrationError, setHotkeyRegistrationError] = useState<string | null>(null);
+  const [globalHotkeyEnabled, setGlobalHotkeyEnabled] = useState<boolean>(() => {
+    const stored = readStoredString(STORAGE_KEY_GLOBAL_HOTKEY_ENABLED);
+    if (stored === null) return true; // Default to enabled
+    return stored === 'true';
+  });
   const incomingTerminalSettingsSignatureRef = useRef<string | null>(null);
   const localTerminalSettingsVersionRef = useRef(0);
   const broadcastedLocalTerminalSettingsVersionRef = useRef(0);
@@ -457,6 +463,9 @@ export const useSettingsState = () => {
       if (key === STORAGE_KEY_HOTKEY_RECORDING && typeof value === 'boolean') {
         setIsHotkeyRecordingState(value);
       }
+      if (key === STORAGE_KEY_GLOBAL_HOTKEY_ENABLED && typeof value === 'boolean') {
+        setGlobalHotkeyEnabled((prev) => (prev === value ? prev : value));
+      }
     });
     return () => {
       try {
@@ -622,11 +631,18 @@ export const useSettingsState = () => {
           setSftpUseCompressedUpload(newValue);
         }
       }
+      // Sync global hotkey enabled setting from other windows
+      if (e.key === STORAGE_KEY_GLOBAL_HOTKEY_ENABLED && e.newValue !== null) {
+        const newValue = e.newValue === 'true';
+        if (newValue !== globalHotkeyEnabled) {
+          setGlobalHotkeyEnabled(newValue);
+        }
+      }
     };
 
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [theme, lightUiThemeId, darkUiThemeId, accentMode, customAccent, customCSS, uiFontFamilyId, hotkeyScheme, uiLanguage, terminalThemeId, terminalFontFamilyId, terminalFontSize, sftpDoubleClickBehavior, sftpAutoSync, sftpShowHiddenFiles, sftpUseCompressedUpload, editorWordWrap, sessionLogsEnabled, sessionLogsDir, sessionLogsFormat, mergeIncomingTerminalSettings]);
+  }, [theme, lightUiThemeId, darkUiThemeId, accentMode, customAccent, customCSS, uiFontFamilyId, hotkeyScheme, uiLanguage, terminalThemeId, terminalFontFamilyId, terminalFontSize, sftpDoubleClickBehavior, sftpAutoSync, sftpShowHiddenFiles, sftpUseCompressedUpload, editorWordWrap, sessionLogsEnabled, sessionLogsDir, sessionLogsFormat, globalHotkeyEnabled, mergeIncomingTerminalSettings]);
 
   useEffect(() => {
     localStorageAdapter.writeString(STORAGE_KEY_TERM_THEME, terminalThemeId);
@@ -734,7 +750,7 @@ export const useSettingsState = () => {
     // Register/unregister the global hotkey in main process
     const bridge = netcattyBridge.get();
     if (bridge?.registerGlobalHotkey) {
-      if (toggleWindowHotkey) {
+      if (toggleWindowHotkey && globalHotkeyEnabled) {
         setHotkeyRegistrationError(null);
         bridge
           .registerGlobalHotkey(toggleWindowHotkey)
@@ -755,7 +771,13 @@ export const useSettingsState = () => {
         });
       }
     }
-  }, [toggleWindowHotkey, notifySettingsChanged]);
+  }, [toggleWindowHotkey, globalHotkeyEnabled, notifySettingsChanged]);
+
+  // Persist global hotkey enabled setting
+  useEffect(() => {
+    localStorageAdapter.writeString(STORAGE_KEY_GLOBAL_HOTKEY_ENABLED, globalHotkeyEnabled ? 'true' : 'false');
+    notifySettingsChanged(STORAGE_KEY_GLOBAL_HOTKEY_ENABLED, globalHotkeyEnabled);
+  }, [globalHotkeyEnabled, notifySettingsChanged]);
 
   // Persist and sync close to tray setting
   useEffect(() => {
@@ -913,5 +935,7 @@ export const useSettingsState = () => {
     closeToTray,
     setCloseToTray,
     hotkeyRegistrationError,
+    globalHotkeyEnabled,
+    setGlobalHotkeyEnabled,
   };
 };

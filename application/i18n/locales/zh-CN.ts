@@ -126,6 +126,8 @@ const zhCN: Messages = {
   'settings.globalHotkey.reset': '恢复默认',
   'settings.globalHotkey.closeToTray': '关闭时最小化到托盘',
   'settings.globalHotkey.closeToTrayDesc': '启用后，关闭窗口将最小化到系统托盘而不是退出程序。',
+  'settings.globalHotkey.enabled': '启用全局快捷键',
+  'settings.globalHotkey.enabledDesc': '注册系统级键盘快捷键。禁用后将取消所有全局快捷键注册。',
   'settings.globalHotkey.hint': '全局快捷键在系统范围内工作，可快速显示或隐藏窗口（下拉式终端风格）。',
 
   // Tray Panel
