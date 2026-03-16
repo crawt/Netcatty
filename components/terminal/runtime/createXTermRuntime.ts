@@ -617,18 +617,41 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
   // OSC 52 — clipboard integration
   // Format: 52;<target>;<base64-data>  (write)  or  52;<target>;?  (query/read)
   // <target> is typically "c" (clipboard) or "p" (primary selection)
+  // Controlled by terminalSettings.osc52Clipboard: 'off' | 'write-only' | 'read-write'
   const osc52Disposable = term.parser.registerOscHandler(52, (data) => {
+    const settings = ctx.terminalSettingsRef.current;
+    const mode = settings?.osc52Clipboard ?? 'write-only';
+    if (mode === 'off') return true;
+
     try {
       const semi = data.indexOf(';');
       if (semi < 0) return true;
       const payload = data.substring(semi + 1);
+
       if (payload === '?') {
-        // Read request — ignore for security (don't expose clipboard to remote)
-        logger.debug('[XTerm] OSC 52 read request ignored for security');
+        // Read request — only allowed in read-write mode
+        if (mode !== 'read-write') {
+          logger.debug('[XTerm] OSC 52 read request ignored (mode:', mode, ')');
+          return true;
+        }
+        const sessionId = ctx.sessionRef.current;
+        if (!sessionId) return true;
+        navigator.clipboard.readText().then((text) => {
+          const bytes = new TextEncoder().encode(text);
+          const b64 = btoa(String.fromCharCode(...bytes));
+          // Reply with OSC 52 response: \x1b]52;c;<base64>\x07
+          const target = data.substring(0, semi);
+          ctx.terminalBackend.writeToSession(sessionId, `\x1b]52;${target};${b64}\x07`);
+        }).catch((err) => {
+          logger.warn('[XTerm] OSC 52 clipboard read failed:', err);
+        });
         return true;
       }
-      // Write: payload is base64-encoded text
-      const text = atob(payload);
+
+      // Write: payload is base64-encoded UTF-8 text
+      const binary = atob(payload);
+      const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+      const text = new TextDecoder().decode(bytes);
       navigator.clipboard.writeText(text).catch((err) => {
         logger.warn('[XTerm] OSC 52 clipboard write failed:', err);
       });

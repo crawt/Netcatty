@@ -434,6 +434,9 @@ export interface TerminalSettings {
   // Paste
   disableBracketedPaste: boolean; // Disable bracketed paste mode (avoid ^[[200~ artifacts)
 
+  // Clipboard
+  osc52Clipboard: 'off' | 'write-only' | 'read-write'; // OSC-52 clipboard access: off, write-only (default), or read-write
+
   // Rendering
   rendererType: 'auto' | 'webgl' | 'canvas'; // Terminal renderer: auto (detect based on hardware), webgl, or canvas
 }
@@ -541,6 +544,7 @@ export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
   showServerStats: true, // Show server stats by default
   serverStatsRefreshInterval: 5, // Refresh every 5 seconds
   disableBracketedPaste: false, // Bracketed paste enabled by default
+  osc52Clipboard: 'write-only', // OSC-52: allow remote programs to write clipboard by default
   rendererType: 'auto', // Auto-detect best renderer based on hardware
 };
 
