@@ -302,6 +302,7 @@ const SnippetsManager: React.FC<SnippetsManagerProps> = ({
         package: editingSnippet.package || '',
         targets: targetSelection,
         shortkey: editingSnippet.shortkey,
+        noAutoRun: editingSnippet.noAutoRun,
       });
       setRightPanelMode('none');
     }
@@ -790,6 +791,17 @@ const SnippetsManager: React.FC<SnippetsManagerProps> = ({
                 onChange={(e) => setEditingSnippet({ ...editingSnippet, command: e.target.value })}
               />
             </Card>
+
+            {/* No Auto Run */}
+            <label className="flex items-center gap-2 cursor-pointer px-1">
+              <input
+                type="checkbox"
+                checked={editingSnippet.noAutoRun ?? false}
+                onChange={(e) => setEditingSnippet({ ...editingSnippet, noAutoRun: e.target.checked || undefined })}
+                className="rounded border-input"
+              />
+              <span className="text-xs text-muted-foreground">{t('snippets.field.noAutoRun')}</span>
+            </label>
 
             {/* Shortkey */}
             <Card className="p-3 space-y-2 bg-card border-border/80">
