@@ -27,7 +27,7 @@ import { createCattyTools } from '../../../infrastructure/ai/sdk/tools';
 import type { NetcattyBridge, ExecutorContext } from '../../../infrastructure/ai/cattyAgent/executor';
 import { runExternalAgentTurn } from '../../../infrastructure/ai/externalAgentAdapter';
 import { runAcpAgentTurn } from '../../../infrastructure/ai/acpAgentAdapter';
-import { classifyError, sanitizeErrorMessage } from '../../../infrastructure/ai/errorClassifier';
+import { classifyError } from '../../../infrastructure/ai/errorClassifier';
 
 // -------------------------------------------------------------------
 // Stream chunk type interfaces (Issue #13: replace unsafe casts)
@@ -297,8 +297,6 @@ export function useAIChatStreaming({
     // Log the full unsanitized error for debugging
     console.error('[AIChatSidePanel] Stream error (full):', errorStr);
     const errorInfo = classifyError(errorStr);
-    // Sanitize the displayed message to avoid leaking paths, keys, or other sensitive info
-    errorInfo.message = sanitizeErrorMessage(errorInfo.message);
     updateLastMessage(sessionId, msg => ({
       ...msg,
       statusText: '',
