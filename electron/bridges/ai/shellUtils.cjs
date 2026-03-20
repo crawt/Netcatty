@@ -15,6 +15,7 @@ const path = require("node:path");
 const ANSI_ESCAPE_REGEX = /\u001B\[[0-?]*[ -/]*[@-~]/g;
 const ANSI_OSC_REGEX = /\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
 const URL_CANDIDATE_REGEX = /https?:\/\/[^\s]+/g;
+const WINDOWS_RUNNABLE_EXTENSIONS = [".exe", ".cmd", ".bat", ".com"];
 
 // ── ANSI stripping ──
 
@@ -56,6 +57,37 @@ function extractFirstNonLocalhostUrl(output) {
 
 // ── CLI / path helpers ──
 
+function normalizeCliPathForPlatform(filePath) {
+  const normalized = String(filePath || "").trim();
+  if (!normalized) return null;
+
+  if (process.platform !== "win32") {
+    return existsSync(normalized) ? normalized : null;
+  }
+
+  const ext = path.extname(normalized).toLowerCase();
+  if (ext) {
+    return existsSync(normalized) ? normalized : null;
+  }
+
+  // Windows npm globals often contain both a POSIX shim (`codex`) and the
+  // actual runnable wrapper (`codex.cmd`). Prefer the wrapper when present.
+  for (const suffix of WINDOWS_RUNNABLE_EXTENSIONS) {
+    const candidate = `${normalized}${suffix}`;
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return existsSync(normalized) ? normalized : null;
+}
+
+function shouldUseShellForCommand(command) {
+  if (process.platform !== "win32") return false;
+  const normalized = String(command || "").trim().toLowerCase();
+  return normalized.endsWith(".cmd") || normalized.endsWith(".bat");
+}
+
 function resolveCliFromPath(command, shellEnv) {
   // Validate command: only allow valid binary names (alphanumeric, hyphens, underscores, dots)
   if (!command || !/^[a-zA-Z0-9._-]+$/.test(command)) {
@@ -70,8 +102,11 @@ function resolveCliFromPath(command, shellEnv) {
         timeout: 3000,
         stdio: ["pipe", "pipe", "pipe"],
         env: shellEnv,
-      }).trim().split("\n")[0].trim();
-      if (resolved && existsSync(resolved)) return resolved;
+      }).trim();
+      for (const candidate of resolved.split(/\r?\n/)) {
+        const normalized = normalizeCliPathForPlatform(candidate);
+        if (normalized) return normalized;
+      }
     } catch {
       // Not found on PATH
     }
@@ -238,6 +273,8 @@ module.exports = {
   stripAnsi,
   isLocalhostHostname,
   extractFirstNonLocalhostUrl,
+  normalizeCliPathForPlatform,
+  shouldUseShellForCommand,
   resolveCliFromPath,
   resolveClaudeAcpBinaryPath,
   toUnpackedAsarPath,
