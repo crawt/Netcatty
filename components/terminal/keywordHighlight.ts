@@ -16,6 +16,8 @@ interface CachedDecorationRange {
   color: string;
 }
 
+const EMPTY_CACHED_DECORATION_RANGES: CachedDecorationRange[] = [];
+
 /**
  * Manages terminal decorations for keyword highlighting.
  * Uses xterm.js Decoration API to overlay styles without modifying the data stream.
@@ -30,7 +32,6 @@ export class KeywordHighlighter implements IDisposable {
   private matchCache = new Map<string, CachedDecorationRange[]>();
   private enabled: boolean = false;
   private disposables: IDisposable[] = [];
-  private lastViewportY: number = -1;
 
   constructor(term: XTerm) {
     this.term = term;
@@ -47,16 +48,7 @@ export class KeywordHighlighter implements IDisposable {
         this.triggerRefresh("immediate");
       }),
       // Also refresh on resize as viewport content changes
-      this.term.onResize(() => this.triggerRefresh("debounced")),
-      // onRender fires after each render cycle - catch scrolls that onScroll might miss
-      this.term.onRender(() => {
-        // Only trigger refresh if viewport position changed
-        const currentViewportY = this.term.buffer.active?.viewportY ?? 0;
-        if (currentViewportY !== this.lastViewportY) {
-          this.lastViewportY = currentViewportY;
-          this.triggerRefresh("debounced");
-        }
-      })
+      this.term.onResize(() => this.triggerRefresh("debounced"))
     );
   }
 
@@ -264,8 +256,9 @@ export class KeywordHighlighter implements IDisposable {
   }
 
   private scanLine(line: IBufferLine, lineText: string): CachedDecorationRange[] {
+    const canUseDirectColumnMapping = line.length === lineText.length;
     let cellMap: number[] | null = null;
-    const ranges: CachedDecorationRange[] = [];
+    let ranges: CachedDecorationRange[] | null = null;
 
     // Process each pre-compiled rule
     for (const { regex, color } of this.compiledRules) {
@@ -277,17 +270,25 @@ export class KeywordHighlighter implements IDisposable {
         const strStart = match.index;
         const strEnd = strStart + match[0].length;
 
-        if (cellMap === null) {
+        if (!canUseDirectColumnMapping && cellMap === null) {
           cellMap = this.buildStringToCellMap(line);
         }
 
         // Map string indices to cell columns
-        const cellStartCol = cellMap[strStart] ?? strStart;
-        const cellEndCol = cellMap[strEnd] ?? strEnd;
+        const cellStartCol = canUseDirectColumnMapping
+          ? strStart
+          : (cellMap?.[strStart] ?? strStart);
+        const cellEndCol = canUseDirectColumnMapping
+          ? strEnd
+          : (cellMap?.[strEnd] ?? strEnd);
         const cellWidth = cellEndCol - cellStartCol;
 
         // Skip if width is 0 or negative (shouldn't happen, but be safe)
         if (cellWidth <= 0) continue;
+
+        if (ranges === null) {
+          ranges = [];
+        }
 
         ranges.push({
           x: cellStartCol,
@@ -297,6 +298,6 @@ export class KeywordHighlighter implements IDisposable {
       }
     }
 
-    return ranges;
+    return ranges ?? EMPTY_CACHED_DECORATION_RANGES;
   }
 }
