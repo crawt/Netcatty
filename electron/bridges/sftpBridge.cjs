@@ -1604,9 +1604,20 @@ async function getSftpHomeDir(_event, payload) {
   // hosts with blocking shell init scripts or forced commands)
   const sshClient = client.client;
   if (sshClient && typeof sshClient.exec === "function") {
+    let execStream = null;
     try {
+      const execPromise = new Promise((resolve, reject) => {
+        sshClient.exec("echo ~", (err, stream) => {
+          if (err) return reject(err);
+          execStream = stream;
+          let stdout = "";
+          stream.on("close", (code) => resolve({ stdout, code }));
+          stream.on("data", (data) => { stdout += data.toString(); });
+          stream.stderr.on("data", () => {});
+        });
+      });
       const result = await Promise.race([
-        execSshCommand(sshClient, "echo ~"),
+        execPromise,
         new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
       ]);
       const home = result.stdout?.trim();
@@ -1614,15 +1625,19 @@ async function getSftpHomeDir(_event, payload) {
         return { success: true, homeDir: home };
       }
     } catch {
+      // Timeout or error — kill the exec channel if still open
+      try { execStream?.close?.(); } catch {}
+      try { execStream?.destroy?.(); } catch {}
       // Fall through to SFTP realpath
     }
   }
 
-  // Method 2: SFTP realpath('.')
+  // Method 2: SFTP realpath('.') — skip if result is '/' for non-root users
+  // because some SFTP servers start in '/' rather than the user's home
   try {
     const sftp = await requireSftpChannel(client);
     const absPath = await realpathAsync(sftp, ".");
-    if (absPath) {
+    if (absPath && absPath !== "/") {
       return { success: true, homeDir: absPath };
     }
   } catch {
