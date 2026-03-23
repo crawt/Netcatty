@@ -36,6 +36,9 @@ export const XTERM_PERFORMANCE_CONFIG = {
     // Font rendering settings
     letterSpacing: 0,
     lineHeight: 1,
+
+    // Keep viewport movement smooth without feeling sluggish.
+    smoothScrollDuration: 120,
   },
 
   // WebGL-specific optimizations
@@ -114,6 +117,7 @@ export type ResolvedXTermPerformance = {
     customGlyphs: boolean;
     letterSpacing: number;
     lineHeight: number;
+    smoothScrollDuration: number;
     documentOverride: boolean;
     tabStopWidth: number;
     convertEol: boolean;
@@ -181,6 +185,7 @@ export function resolveXTermPerformanceConfig({
     customGlyphs: baseConfig.rendering.customGlyphs,
     letterSpacing: baseConfig.rendering.letterSpacing,
     lineHeight: baseConfig.rendering.lineHeight,
+    smoothScrollDuration: baseConfig.rendering.smoothScrollDuration,
     documentOverride: baseConfig.events.documentOverride,
     tabStopWidth: baseConfig.events.tabStopWidth,
     convertEol: baseConfig.events.convertEol,
