@@ -93,6 +93,8 @@ jobs:
     name: build-linux-x64
     runs-on: ubuntu-22.04
     env:
+      npm_config_arch: x64
+      npm_config_target_arch: x64
       VITE_SYNC_GITHUB_CLIENT_ID: ${{ secrets.VITE_SYNC_GITHUB_CLIENT_ID }}
       VITE_SYNC_GOOGLE_CLIENT_ID: ${{ secrets.VITE_SYNC_GOOGLE_CLIENT_ID }}
       VITE_SYNC_GOOGLE_CLIENT_SECRET: ${{ secrets.VITE_SYNC_GOOGLE_CLIENT_SECRET }}
@@ -159,6 +161,8 @@ jobs:
     container:
       image: debian:bullseye
     env:
+      npm_config_arch: arm64
+      npm_config_target_arch: arm64
       VITE_SYNC_GITHUB_CLIENT_ID: ${{ secrets.VITE_SYNC_GITHUB_CLIENT_ID }}
       VITE_SYNC_GOOGLE_CLIENT_ID: ${{ secrets.VITE_SYNC_GOOGLE_CLIENT_ID }}
       VITE_SYNC_GOOGLE_CLIENT_SECRET: ${{ secrets.VITE_SYNC_GOOGLE_CLIENT_SECRET }}
@@ -238,6 +242,20 @@ jobs:
 
       - name: List artifacts
         run: ls -la artifacts/
+
+      - name: Verify downloaded Linux amd64 deb artifact
+        run: |
+          deb_file="$(find artifacts -maxdepth 1 -type f -name '*-linux-amd64.deb' -print | sort | head -n 1)"
+          test -n "${deb_file}"
+          bash scripts/verify-linux-deb-artifact.sh amd64 "${deb_file}"
+
+      - name: Verify downloaded Linux arm64 deb artifact metadata
+        env:
+          VERIFY_LOAD: "0"
+        run: |
+          deb_file="$(find artifacts -maxdepth 1 -type f -name '*-linux-arm64.deb' -print | sort | head -n 1)"
+          test -n "${deb_file}"
+          bash scripts/verify-linux-deb-artifact.sh arm64 "${deb_file}"
 
       - name: Generate Release Body
         run: node .github/scripts/generate-release-note.js

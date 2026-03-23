@@ -5,7 +5,7 @@ set -euo pipefail
 TEMP_DIR=""
 
 usage() {
-  echo "Usage: $0 <amd64|arm64>" >&2
+  echo "Usage: $0 <amd64|arm64> [deb-file]" >&2
   exit 1
 }
 
@@ -67,6 +67,11 @@ assert_loadable_native_module() {
   local electron_bin="$1"
   local native_module="$2"
 
+  if [[ "${VERIFY_LOAD:-1}" != "1" ]]; then
+    echo "[deb-verify] skipping native module load check for ${native_module} (VERIFY_LOAD=${VERIFY_LOAD:-1})"
+    return
+  fi
+
   echo "[deb-verify] loading native module with packaged Electron runtime: ${native_module}"
   ELECTRON_RUN_AS_NODE=1 "${electron_bin}" -e '
     const path = require("node:path");
@@ -75,8 +80,56 @@ assert_loadable_native_module() {
   ' "${native_module}"
 }
 
+resolve_file_from_glob() {
+  local search_dir="$1"
+  local pattern="$2"
+  find "${search_dir}" -maxdepth 1 -type f -name "${pattern}" -print | sort | head -n 1
+}
+
+resolve_single_file() {
+  local search_dir="$1"
+  local pattern="$2"
+  local file
+
+  file="$(resolve_file_from_glob "${search_dir}" "${pattern}")"
+  if [[ -z "${file}" ]]; then
+    echo "[deb-verify] no file matched ${pattern} under ${search_dir}" >&2
+    exit 1
+  fi
+
+  echo "${file}"
+}
+
+resolve_serialport_prebuild() {
+  local root="$1"
+  local arch="$2"
+  local prebuild_dir="${root}/prebuilds/linux-${arch}"
+  local file
+
+  file="$(find "${prebuild_dir}" -maxdepth 1 -type f -name '@serialport+bindings-cpp*.glibc.node' -print | sort | head -n 1)"
+  if [[ -z "${file}" ]]; then
+    echo "[deb-verify] serialport glibc prebuild not found under ${prebuild_dir}" >&2
+    exit 1
+  fi
+
+  echo "${file}"
+}
+
+verify_native_module() {
+  local label="$1"
+  local electron_bin="$2"
+  local file="$3"
+  local expected_machine="$4"
+
+  assert_exists "${file}"
+  echo "[deb-verify] verifying ${label}"
+  log_file_info "${file}"
+  assert_file_arch "${file}" "${expected_machine}"
+  assert_loadable_native_module "${electron_bin}" "${file}"
+}
+
 main() {
-  if [[ $# -ne 1 ]]; then
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
     usage
   fi
 
@@ -89,6 +142,9 @@ main() {
   local main_binary
   local build_release_pty
   local prebuild_pty
+  local serialport_root
+  local build_release_serialport
+  local prebuild_serialport
 
   require_cmd dpkg-deb
   require_cmd file
@@ -107,10 +163,11 @@ main() {
       ;;
   esac
 
-  deb_file="$(find release -maxdepth 1 -type f -name "*-linux-${deb_arch}.deb" -print | sort | head -n 1)"
-  if [[ -z "${deb_file}" ]]; then
-    echo "[deb-verify] no deb artifact found for ${deb_arch} under release/" >&2
-    exit 1
+  if [[ $# -eq 2 ]]; then
+    deb_file="$2"
+    assert_exists "${deb_file}"
+  else
+    deb_file="$(resolve_single_file "release" "*-linux-${deb_arch}.deb")"
   fi
 
   echo "[deb-verify] verifying deb artifact: ${deb_file}"
@@ -131,22 +188,19 @@ main() {
   main_binary="${TEMP_DIR}/opt/Netcatty/netcatty"
   build_release_pty="${TEMP_DIR}/opt/Netcatty/resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node"
   prebuild_pty="${TEMP_DIR}/opt/Netcatty/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-${prebuild_arch}/pty.node"
+  serialport_root="${TEMP_DIR}/opt/Netcatty/resources/app.asar.unpacked/node_modules/@serialport/bindings-cpp"
+  build_release_serialport="${serialport_root}/build/Release/bindings.node"
+  prebuild_serialport="$(resolve_serialport_prebuild "${serialport_root}" "${prebuild_arch}")"
 
   assert_executable "${electron_bin}"
-  assert_exists "${build_release_pty}"
-  assert_exists "${prebuild_pty}"
 
   echo "[deb-verify] verifying packaged binary architectures"
   log_file_info "${main_binary}"
-  log_file_info "${build_release_pty}"
-  log_file_info "${prebuild_pty}"
-
   assert_file_arch "${main_binary}" "${expected_machine}"
-  assert_file_arch "${build_release_pty}" "${expected_machine}"
-  assert_file_arch "${prebuild_pty}" "${expected_machine}"
-
-  assert_loadable_native_module "${electron_bin}" "${build_release_pty}"
-  assert_loadable_native_module "${electron_bin}" "${prebuild_pty}"
+  verify_native_module "node-pty build/Release" "${electron_bin}" "${build_release_pty}" "${expected_machine}"
+  verify_native_module "node-pty prebuild" "${electron_bin}" "${prebuild_pty}" "${expected_machine}"
+  verify_native_module "serialport build/Release" "${electron_bin}" "${build_release_serialport}" "${expected_machine}"
+  verify_native_module "serialport glibc prebuild" "${electron_bin}" "${prebuild_serialport}" "${expected_machine}"
 
   echo "[deb-verify] deb artifact verification passed for ${deb_file}"
 }
