@@ -145,12 +145,10 @@ function clearPendingApprovals(chatSessionId) {
 function cancelAllPtyExecs() {
   for (const [marker, entry] of activePtyExecs) {
     try {
-      entry.cleanup();
-      // Send Ctrl+C to kill the running command
-      if (entry.ptyStream && typeof entry.ptyStream.write === "function") {
-        entry.ptyStream.write("\x03");
-      }
+      if (typeof entry.cancel === "function") entry.cancel();
+      else entry.cleanup();
     } catch { /* ignore */ }
+    activePtyExecs.delete(marker);
   }
   activePtyExecs.clear();
 }
@@ -164,10 +162,8 @@ function cancelPtyExecsForSession(chatSessionId) {
   for (const [marker, entry] of activePtyExecs) {
     if (entry.chatSessionId !== chatSessionId) continue;
     try {
-      entry.cleanup();
-      if (entry.ptyStream && typeof entry.ptyStream.write === "function") {
-        entry.ptyStream.write("\x03");
-      }
+      if (typeof entry.cancel === "function") entry.cancel();
+      else entry.cleanup();
     } catch { /* ignore */ }
     activePtyExecs.delete(marker);
   }

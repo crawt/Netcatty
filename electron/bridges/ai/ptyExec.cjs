@@ -50,31 +50,49 @@ function hasExpectedPromptSuffix(text, expectedPrompt) {
   return !!normalizedPrompt && normalizedText.endsWith(normalizedPrompt);
 }
 
+function escapePosixSingleQuoted(text) {
+  return String(text || "").replace(/'/g, "'\\''");
+}
+
+function escapePowerShellSingleQuoted(text) {
+  return String(text || "").replace(/'/g, "''");
+}
+
+function escapeFishSingleQuoted(text) {
+  return String(text || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+function escapeCmdForNestedShell(text) {
+  return String(text || "").replace(/"/g, '""').replace(/%/g, "%%");
+}
+
 function buildWrappedCommand(command, shellKind, marker) {
   switch (shellKind) {
     case "powershell": {
       // __NCMCP_ prefix ensures the echo line is buffered/filtered even if
       // the PTY delivers it in small chunks (the marker must appear early).
       const psPager = "$env:PAGER='cat'; $env:SYSTEMD_PAGER=''; $env:GIT_PAGER='cat'; $env:LESS=''; ";
-      const psEscaped = command.replace(/'/g, "''");
+      const psEscaped = escapePowerShellSingleQuoted(command);
       return (
-        `$${marker}=0; Write-Host '> ${psEscaped}'; & { Write-Output '${marker}_S'; ${psPager}${command}; Write-Output "${marker}_E:$LASTEXITCODE" }\r\n`
+        `$${marker}=0; $${marker}_cmd='${psEscaped}'; Write-Host '> ${psEscaped}'; & { Write-Output '${marker}_S'; ${psPager}try { Invoke-Expression $${marker}_cmd; $${marker}_rc = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 } } catch { $${marker}_rc = 1 }; Write-Output "${marker}_E:$${marker}_rc" }\r\n`
       );
     }
 
-    case "cmd":
+    case "cmd": {
+      const cmdEscaped = escapeCmdForNestedShell(command);
       return (
-        `set "${marker}=0" & echo ^> ${command} & (echo ${marker}_S & set "PAGER=cat" & set "SYSTEMD_PAGER=" & set "GIT_PAGER=cat" & set "LESS=" & ${command} & call echo ${marker}_E:^%errorlevel^%)\r\n`
+        `set "${marker}=0" & set "${marker}_CMD=${cmdEscaped}" & echo ^> ${command} & (echo ${marker}_S & set "PAGER=cat" & set "SYSTEMD_PAGER=" & set "GIT_PAGER=cat" & set "LESS=" & cmd /d /s /c "%${marker}_CMD%" & call echo ${marker}_E:^%errorlevel^%)\r\n`
       );
+    }
 
     case "fish":
       // set __NCMCP_... at the start ensures early marker presence in echo.
       return (
         `set ${marker} 0; function __ncmcp_int --on-signal INT; printf '%s\\n' '${marker}_E:130'; functions -e __ncmcp_int; end; ` +
         // Clear the current terminal row before the user-visible echo.
-        `printf '\\r\\033[2K> %s\\n' '${command.replace(/'/g, "\\'")}'; ` +
+        `set -l ${marker}_cmd '${escapeFishSingleQuoted(command)}'; printf '\\r\\033[2K> %s\\n' '${escapeFishSingleQuoted(command)}'; ` +
         `begin; set -gx PAGER cat; set -gx SYSTEMD_PAGER ''; set -gx GIT_PAGER cat; set -gx LESS ''; ` +
-        `printf '%s\\n' '${marker}_S'; ${command}; set __NCMCP_rc $status; ` +
+        `printf '%s\\n' '${marker}_S'; eval -- \$${marker}_cmd; set __NCMCP_rc $status; ` +
         `functions -e __ncmcp_int; printf '%s\\n' '${marker}_E:'\$__NCMCP_rc; end\n`
       );
 
@@ -105,9 +123,9 @@ function buildWrappedCommand(command, shellKind, marker) {
       //    trap ':' INT lets child processes receive SIGINT normally while
       //    preventing the shell from aborting the compound command.
       const noPager = "PAGER=cat SYSTEMD_PAGER= GIT_PAGER=cat LESS= ";
-      const escaped = command.replace(/'/g, "'\\''");
+      const escaped = escapePosixSingleQuoted(command);
       return (
-        `${marker}=0; printf '\\r\\033[2K> %s\\n' '${escaped}'; { printf '%s\\n' '${marker}_S'; trap ':' INT; ${noPager}eval -- '${escaped}'; __NCMCP_rc=$?; trap - INT; printf '%s\\n' '${marker}_E:'\"$__NCMCP_rc\"; (exit $__NCMCP_rc); }\n`
+        `${marker}=0; ${marker}_cmd='${escaped}'; printf '\\r\\033[2K> %s\\n' '${escaped}'; { printf '%s\\n' '${marker}_S'; trap ':' INT; ${noPager}eval "$${marker}_cmd"; __NCMCP_rc=$?; trap - INT; printf '%s\\n' '${marker}_E:'\"$__NCMCP_rc\"; (exit $__NCMCP_rc); }\n`
       );
     }
   }
@@ -289,6 +307,10 @@ function execViaPty(ptyStream, command, options) {
       trackForCancellation.set(marker, {
         ptyStream,
         chatSessionId: chatSessionId || null,
+        cancel: () => {
+          if (typeof ptyStream.write === "function") ptyStream.write("\x03");
+          finish(output, -1, "Cancelled");
+        },
         cleanup: () => {
           clearTimeout(timeoutId);
           unsubscribe?.();
@@ -376,6 +398,10 @@ function execViaChannel(sshClient, command, options) {
       if (trackForCancellation) {
         trackForCancellation.set(marker, {
           chatSessionId: chatSessionId || null,
+          cancel: () => {
+            try { execStream.close(); } catch { /* ignore */ }
+            finish({ ok: false, stdout, stderr, exitCode: -1, error: "Cancelled" });
+          },
           cleanup: () => {
             clearTimeout(timeoutId);
             try { execStream.close(); } catch { /* ignore */ }

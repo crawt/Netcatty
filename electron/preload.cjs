@@ -149,6 +149,11 @@ ipcRenderer.on("netcatty:exit", (_event, payload) => {
   }
   dataListeners.delete(payload.sessionId);
   exitListeners.delete(payload.sessionId);
+  const pendingTimer = _mcpFlushTimers.get(payload.sessionId);
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    _mcpFlushTimers.delete(payload.sessionId);
+  }
   _mcpLineBufs.delete(payload.sessionId); // clean up any held fragment
 });
 

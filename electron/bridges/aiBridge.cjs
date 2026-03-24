@@ -2086,19 +2086,20 @@ function registerHandlers(ipcMain) {
   ipcMain.handle("netcatty:ai:acp:cancel", async (event, { requestId, chatSessionId }) => {
     if (!validateSender(event)) return { ok: false, error: "Unauthorized IPC sender" };
     const effectiveChatSessionId = chatSessionId || acpRequestSessions.get(requestId);
+    const activeRun = effectiveChatSessionId ? acpChatRuns.get(effectiveChatSessionId) : null;
+    const effectiveRequestId = requestId || activeRun?.requestId || "";
     // Cancel PTY executions scoped to this chat session (send Ctrl+C)
     mcpServerBridge.cancelPtyExecsForSession(effectiveChatSessionId);
     mcpServerBridge.setChatSessionCancelled?.(effectiveChatSessionId, true);
     mcpServerBridge.clearPendingApprovals(effectiveChatSessionId);
-    const activeRun = effectiveChatSessionId ? acpChatRuns.get(effectiveChatSessionId) : null;
-    if (activeRun && activeRun.requestId === requestId) {
+    if (activeRun && activeRun.requestId === effectiveRequestId) {
       activeRun.cancelRequested = true;
     }
-    const controller = acpActiveStreams.get(requestId);
+    const controller = acpActiveStreams.get(effectiveRequestId);
     let cancelled = false;
     if (controller) {
       controller.abort();
-      acpActiveStreams.delete(requestId);
+      acpActiveStreams.delete(effectiveRequestId);
       cancelled = true;
     }
     if (effectiveChatSessionId) {
@@ -2109,7 +2110,7 @@ function registerHandlers(ipcMain) {
     // continue within the same persisted conversation context. Full provider
     // cleanup is handled by netcatty:ai:acp:cleanup when the chat is deleted.
     if (effectiveChatSessionId) cancelled = true;
-    acpRequestSessions.delete(requestId);
+    if (effectiveRequestId) acpRequestSessions.delete(effectiveRequestId);
     return cancelled ? { ok: true } : { ok: false, error: "Stream not found" };
   });
 
