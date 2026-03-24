@@ -53,6 +53,51 @@ function init(deps) {
 }
 
 /**
+ * Create an 8ms/16KB PTY data buffer for reduced IPC overhead.
+ * Mirrors the SSH stream buffering strategy in sshBridge.cjs.
+ * @param {Function} sendFn - called with the accumulated string to deliver
+ * @returns {{ bufferData: (data: string) => void, flush: () => void }}
+ */
+function createPtyBuffer(sendFn) {
+  const FLUSH_INTERVAL = 8;      // ms - flush every 8ms (~120fps equivalent)
+  const MAX_BUFFER_SIZE = 16384; // 16KB - flush immediately if buffer grows too large
+
+  let dataBuffer = '';
+  let flushTimeout = null;
+
+  const flushBuffer = () => {
+    if (dataBuffer.length > 0) {
+      sendFn(dataBuffer);
+      dataBuffer = '';
+    }
+    flushTimeout = null;
+  };
+
+  const flush = () => {
+    if (flushTimeout) {
+      clearTimeout(flushTimeout);
+      flushTimeout = null;
+    }
+    flushBuffer();
+  };
+
+  const bufferData = (data) => {
+    dataBuffer += data;
+    if (dataBuffer.length >= MAX_BUFFER_SIZE) {
+      if (flushTimeout) {
+        clearTimeout(flushTimeout);
+        flushTimeout = null;
+      }
+      flushBuffer();
+    } else if (!flushTimeout) {
+      flushTimeout = setTimeout(flushBuffer, FLUSH_INTERVAL);
+    }
+  };
+
+  return { bufferData, flush };
+}
+
+/**
  * Find executable path on Windows
  */
 function isWindowsAppExecutionAlias(filePath) {
@@ -245,6 +290,7 @@ function startLocalSession(event, payload) {
     label: "Local Terminal",
     shellExecutable: shell,
     shellKind,
+    flushPendingData: null,
   };
   sessions.set(sessionId, session);
 
@@ -259,13 +305,19 @@ function startLocalSession(event, payload) {
     });
   }
 
-  proc.onData((data) => {
+  const { bufferData: bufferLocalData, flush: flushLocal } = createPtyBuffer((data) => {
     const contents = electronModule.webContents.fromId(session.webContentsId);
     contents?.send("netcatty:data", { sessionId, data });
+  });
+  session.flushPendingData = flushLocal;
+
+  proc.onData((data) => {
+    bufferLocalData(data);
     sessionLogStreamManager.appendData(sessionId, data);
   });
 
   proc.onExit((evt) => {
+    flushLocal();
     sessionLogStreamManager.stopStream(sessionId);
     sessions.delete(sessionId);
     const contents = electronModule.webContents.fromId(session.webContentsId);
@@ -434,7 +486,9 @@ async function startTelnetSession(event, options) {
         webContentsId: event.sender.id,
         cols,
         rows,
+        flushPendingData: null,
       };
+      session.flushPendingData = flushTelnet;
       sessions.set(sessionId, session);
 
       // Start real-time session log stream if configured
@@ -463,6 +517,12 @@ async function startTelnetSession(event, options) {
 
     const telnetDecoder = new StringDecoder(charsetToNodeEncoding(options.charset));
 
+    const telnetWebContentsId = event.sender.id;
+    const { bufferData: bufferTelnetData, flush: flushTelnet } = createPtyBuffer((data) => {
+      const contents = electronModule.webContents.fromId(telnetWebContentsId);
+      contents?.send("netcatty:data", { sessionId, data });
+    });
+
     socket.on('data', (data) => {
       const session = sessions.get(sessionId);
       if (!session) return;
@@ -472,8 +532,7 @@ async function startTelnetSession(event, options) {
       if (cleanData.length > 0) {
         const decoded = telnetDecoder.write(cleanData);
         if (decoded) {
-          const contents = electronModule.webContents.fromId(session.webContentsId);
-          contents?.send("netcatty:data", { sessionId, data: decoded });
+          bufferTelnetData(decoded);
           sessionLogStreamManager.appendData(sessionId, decoded);
         }
       }
@@ -486,6 +545,7 @@ async function startTelnetSession(event, options) {
       if (!connected) {
         reject(new Error(`Failed to connect: ${err.message}`));
       } else {
+        flushTelnet();
         sessionLogStreamManager.stopStream(sessionId);
         const session = sessions.get(sessionId);
         if (session) {
@@ -500,6 +560,7 @@ async function startTelnetSession(event, options) {
       console.log(`[Telnet] Connection closed${hadError ? ' with error' : ''}`);
       clearTimeout(connectTimeout);
 
+      flushTelnet();
       sessionLogStreamManager.stopStream(sessionId);
       const session = sessions.get(sessionId);
       if (session) {
@@ -584,6 +645,7 @@ async function startMoshSession(event, options) {
       label: options.label || options.hostname || 'Mosh Session',
       shellKind: 'posix',
       shellExecutable: 'remote-shell',
+      flushPendingData: null,
     };
     sessions.set(sessionId, session);
 
@@ -598,13 +660,19 @@ async function startMoshSession(event, options) {
       });
     }
 
-    proc.onData((data) => {
+    const { bufferData: bufferMoshData, flush: flushMosh } = createPtyBuffer((data) => {
       const contents = electronModule.webContents.fromId(session.webContentsId);
       contents?.send("netcatty:data", { sessionId, data });
+    });
+    session.flushPendingData = flushMosh;
+
+    proc.onData((data) => {
+      bufferMoshData(data);
       sessionLogStreamManager.appendData(sessionId, data);
     });
 
     proc.onExit((evt) => {
+      flushMosh();
       sessionLogStreamManager.stopStream(sessionId);
       sessions.delete(sessionId);
       const contents = electronModule.webContents.fromId(session.webContentsId);
@@ -798,6 +866,7 @@ function closeSession(event, payload) {
   if (!session) return;
   
   try {
+    session.flushPendingData?.();
     if (session.stream) {
       session.stream.close();
       session.conn?.end();
