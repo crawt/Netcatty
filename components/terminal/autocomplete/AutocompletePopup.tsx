@@ -30,16 +30,19 @@ export interface SubDirPanel {
 interface AutocompletePopupProps {
   suggestions: CompletionSuggestion[];
   selectedIndex: number;
+  /** Position relative to the terminal container (not viewport) */
   position: { x: number; y: number };
   visible: boolean;
   expandUpward?: boolean;
   themeColors?: AutocompleteThemeColors;
   onSelect: (suggestion: CompletionSuggestion) => void;
   maxHeight?: number;
-  /** Stack of cascading sub-directory panels */
   subDirPanels?: SubDirPanel[];
-  /** Which panel level has focus (-1 = main) */
   subDirFocusLevel?: number;
+  /** Reference to the terminal container for calculating fixed position */
+  containerRef?: React.RefObject<HTMLDivElement | null>;
+  /** Offset from top of container to terminal content area (toolbar + search bar) */
+  searchBarOffset?: number;
 }
 
 const SOURCE_LABELS: Record<SuggestionSource, { label: string; fullLabel: string; fallbackColor: string }> = {
@@ -92,6 +95,8 @@ const AutocompletePopup: React.FC<AutocompletePopupProps> = ({
   maxHeight = 240,
   subDirPanels = [],
   subDirFocusLevel = -1,
+  containerRef,
+  searchBarOffset = 30,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLDivElement>(null);
@@ -127,9 +132,15 @@ const AutocompletePopup: React.FC<AutocompletePopupProps> = ({
   const detailItem = detailIndex >= 0 ? suggestions[detailIndex] : null;
   const showDetail = detailItem?.description && detailItem.description.length > 0;
 
-  // Limit maxHeight to not overflow below the terminal container
-  // position.y is relative to the terminal container, not viewport
-  const effectiveMaxHeight = expandUpward ? maxHeight : Math.min(maxHeight, Math.max(120, 600 - position.y));
+  // Calculate fixed viewport position from container rect + relative position
+  const containerRect = containerRef?.current?.getBoundingClientRect();
+  const fixedLeft = (containerRect?.left ?? 0) + 6 + position.x;
+  const fixedTop = (containerRect?.top ?? 0) + searchBarOffset + position.y;
+
+  // Limit maxHeight so popup doesn't exceed viewport bottom
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 800;
+  const spaceBelow = viewportHeight - fixedTop - 8;
+  const effectiveMaxHeight = expandUpward ? maxHeight : Math.min(maxHeight, Math.max(120, spaceBelow));
 
   const sharedBoxStyle = {
     backgroundColor: popupBg,
@@ -146,12 +157,12 @@ const AutocompletePopup: React.FC<AutocompletePopupProps> = ({
   return (
     <div
       style={{
-        position: "absolute",
-        left: `${position.x}px`,
+        position: "fixed",
+        left: `${fixedLeft}px`,
         ...(expandUpward
-          ? { bottom: `calc(100% - ${position.y}px)` }
-          : { top: `${position.y}px` }),
-        zIndex: 1000,
+          ? { bottom: `${viewportHeight - fixedTop}px` }
+          : { top: `${fixedTop}px` }),
+        zIndex: 10000,
         display: "flex",
         alignItems: expandUpward ? "flex-end" : "flex-start",
         gap: "4px",

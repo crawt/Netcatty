@@ -5,7 +5,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { Cpu, HardDrive, Maximize2, MemoryStick, Radio, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-// flushSync removed - no longer needed
+import ReactDOM from "react-dom";
 import { useI18n } from "../application/i18n/I18nProvider";
 import { logger } from "../lib/logger";
 import { cn, normalizeLineEndings, wrapBracketedPaste } from "../lib/utils";
@@ -1868,31 +1868,25 @@ const TerminalComponent: React.FC<TerminalProps> = ({
             }}
           />
 
-          {/* Autocomplete popup overlay — pointer-events-none so terminal stays interactive */}
-          {autocomplete.state.popupVisible && autocomplete.state.suggestions.length > 0 && (
-            <div
-              className="absolute inset-x-0 bottom-0 pointer-events-none"
-              style={{
-                top: isSearchOpen ? "64px" : "30px",
-                paddingLeft: 6,
-                overflow: "visible",
-              }}
-            >
-              <div className="relative w-full h-full" style={{ overflow: "visible" }}>
-                <AutocompletePopup
-                  suggestions={autocomplete.state.suggestions}
-                  selectedIndex={autocomplete.state.selectedIndex}
-                  position={autocomplete.state.popupPosition}
-                  visible={autocomplete.state.popupVisible}
-                  expandUpward={autocomplete.state.expandUpward}
-                  themeColors={effectiveTheme.colors}
-                  onSelect={autocomplete.selectSuggestion}
-                  subDirPanels={autocomplete.state.subDirPanels}
-                  subDirFocusLevel={autocomplete.state.subDirFocusLevel}
-                />
-              </div>
-            </div>
-          )}
+          {/* Autocomplete popup — rendered via Portal to escape overflow:hidden */}
+          {autocomplete.state.popupVisible && autocomplete.state.suggestions.length > 0 &&
+            ReactDOM.createPortal(
+              <AutocompletePopup
+                suggestions={autocomplete.state.suggestions}
+                selectedIndex={autocomplete.state.selectedIndex}
+                position={autocomplete.state.popupPosition}
+                visible={autocomplete.state.popupVisible}
+                expandUpward={autocomplete.state.expandUpward}
+                themeColors={effectiveTheme.colors}
+                onSelect={autocomplete.selectSuggestion}
+                subDirPanels={autocomplete.state.subDirPanels}
+                subDirFocusLevel={autocomplete.state.subDirFocusLevel}
+                containerRef={containerRef}
+                searchBarOffset={isSearchOpen ? 64 : 30}
+              />,
+              document.body,
+            )
+          }
 
           {needsHostKeyVerification && pendingHostKeyInfo && (
             <div className="absolute inset-0 z-30 bg-background">
