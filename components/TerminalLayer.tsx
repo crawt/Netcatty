@@ -204,6 +204,7 @@ type AITerminalSessionInfo = {
   username?: string;
   protocol?: string;
   shellType?: string;
+  deviceType?: string;
   connected: boolean;
 };
 
@@ -235,6 +236,9 @@ const buildAITerminalSessionInfo = (
     username: host?.username || session?.username,
     protocol,
     shellType: session?.shellType && session.shellType !== 'unknown' ? session.shellType : undefined,
+    // Suppress deviceType for Mosh sessions — Mosh requires a shell-backed PTY
+    // and cannot connect to vendor CLIs, so network device mode doesn't apply.
+    deviceType: (session?.moshEnabled || host?.moshEnabled) ? undefined : host?.deviceType,
     connected: session?.status === 'connected',
   };
 };
@@ -796,6 +800,7 @@ const TerminalLayerInner: React.FC<TerminalLayerProps> = ({
           tags: [],
           protocol: session.protocol ?? 'local' as const,
           moshEnabled: session.moshEnabled,
+          charset: session.charset,
         });
       }
     }
