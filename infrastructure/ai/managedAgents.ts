@@ -14,6 +14,11 @@ function getCommandBasename(command: string | undefined): string {
   return (parts.pop() || '').toLowerCase();
 }
 
+function isPathLikeCommand(command: string | undefined): boolean {
+  const normalized = String(command || '').trim();
+  return normalized.includes('/') || normalized.includes('\\');
+}
+
 export function isSettingsManagedDiscoveredAgent(
   agent: Pick<DiscoveredAgent, 'command'>,
 ): agent is Pick<DiscoveredAgent, 'command'> & { command: ManagedAgentKey } {
@@ -31,4 +36,22 @@ export function matchesManagedAgentConfig(
     agent.acpCommand === `${agentKey}${agentKey === 'codex' ? '-acp' : '-agent-acp'}` ||
     meta.commandNames.some((commandName) => basename === commandName || basename.startsWith(`${commandName}.`))
   );
+}
+
+export function getManagedAgentStoredPath(
+  agents: ExternalAgentConfig[],
+  agentKey: ManagedAgentKey,
+): string | null {
+  const managedId = `discovered_${agentKey}`;
+  const preferredAgent = agents.find(
+    (agent) => agent.id === managedId && isPathLikeCommand(agent.command),
+  );
+  if (preferredAgent) {
+    return preferredAgent.command;
+  }
+
+  const fallbackAgent = agents.find(
+    (agent) => matchesManagedAgentConfig(agent, agentKey) && isPathLikeCommand(agent.command),
+  );
+  return fallbackAgent?.command ?? null;
 }

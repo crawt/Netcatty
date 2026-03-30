@@ -8,7 +8,7 @@
  *   - SafetySettings
  */
 import { Bot, Globe } from "lucide-react";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AIPermissionMode,
   AIProviderId,
@@ -16,7 +16,11 @@ import type {
   ProviderConfig,
   WebSearchConfig,
 } from "../../../infrastructure/ai/types";
-import { matchesManagedAgentConfig, type ManagedAgentKey } from "../../../infrastructure/ai/managedAgents";
+import {
+  getManagedAgentStoredPath,
+  matchesManagedAgentConfig,
+  type ManagedAgentKey,
+} from "../../../infrastructure/ai/managedAgents";
 import { PROVIDER_PRESETS } from "../../../infrastructure/ai/types";
 import { useI18n } from "../../../application/i18n/I18nProvider";
 import { TabsContent } from "../../ui/tabs";
@@ -90,8 +94,8 @@ function buildManagedAgentState(
 
   if (!pathInfo?.available || !pathInfo.path) {
     return {
-      agents: otherAgents,
-      defaultAgentId: managedAgents.some((agent) => agent.id === defaultAgentId) ? "catty" : defaultAgentId,
+      agents: prevAgents,
+      defaultAgentId,
     };
   }
 
@@ -155,19 +159,16 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
   const [claudePathInfo, setClaudePathInfo] = useState<AgentPathInfo | null>(null);
   const [claudeCustomPath, setClaudeCustomPath] = useState("");
   const [isResolvingClaude, setIsResolvingClaude] = useState(false);
-
-  const syncManagedAgentRegistration = useCallback((
-    agentKey: ManagedAgentKey,
-    pathInfo: AgentPathInfo | null,
-  ) => {
-    const nextState = buildManagedAgentState(externalAgents, defaultAgentId, agentKey, pathInfo);
-    if (!areExternalAgentListsEqual(externalAgents, nextState.agents)) {
-      setExternalAgents(nextState.agents);
-    }
-    if (nextState.defaultAgentId !== defaultAgentId) {
-      setDefaultAgentId(nextState.defaultAgentId);
-    }
-  }, [defaultAgentId, externalAgents, setDefaultAgentId, setExternalAgents]);
+  const initialManagedPathsRef = useRef<{
+    codex: string;
+    claude: string;
+  } | null>(null);
+  if (!initialManagedPathsRef.current) {
+    initialManagedPathsRef.current = {
+      codex: getManagedAgentStoredPath(externalAgents, "codex") ?? "",
+      claude: getManagedAgentStoredPath(externalAgents, "claude") ?? "",
+    };
+  }
 
   const resolveAgentPath = useCallback(async (
     agentKey: ManagedAgentKey,
@@ -196,19 +197,40 @@ const SettingsAITab: React.FC<SettingsAITabProps> = ({
   }, []);
 
   useEffect(() => {
-    void resolveAgentPath("codex");
-    void resolveAgentPath("claude");
+    void resolveAgentPath("codex", initialManagedPathsRef.current?.codex ?? "");
+    void resolveAgentPath("claude", initialManagedPathsRef.current?.claude ?? "");
   }, [resolveAgentPath]);
 
   useEffect(() => {
-    if (!codexPathInfo) return;
-    syncManagedAgentRegistration("codex", codexPathInfo);
-  }, [codexPathInfo, syncManagedAgentRegistration]);
+    if (!codexPathInfo && !claudePathInfo) return;
 
-  useEffect(() => {
-    if (!claudePathInfo) return;
-    syncManagedAgentRegistration("claude", claudePathInfo);
-  }, [claudePathInfo, syncManagedAgentRegistration]);
+    let nextDefaultAgentId = defaultAgentId;
+    let nextAgents = externalAgents;
+
+    for (const [agentKey, pathInfo] of [
+      ["codex", codexPathInfo],
+      ["claude", claudePathInfo],
+    ] as const) {
+      if (!pathInfo) continue;
+      const nextState = buildManagedAgentState(nextAgents, nextDefaultAgentId, agentKey, pathInfo);
+      nextAgents = nextState.agents;
+      nextDefaultAgentId = nextState.defaultAgentId;
+    }
+
+    if (!areExternalAgentListsEqual(externalAgents, nextAgents)) {
+      setExternalAgents(nextAgents);
+    }
+    if (nextDefaultAgentId !== defaultAgentId) {
+      setDefaultAgentId(nextDefaultAgentId);
+    }
+  }, [
+    claudePathInfo,
+    codexPathInfo,
+    defaultAgentId,
+    externalAgents,
+    setDefaultAgentId,
+    setExternalAgents,
+  ]);
 
   // Validate a custom path for an agent
   const handleCheckCustomPath = useCallback(async (agentKey: "codex" | "claude") => {
