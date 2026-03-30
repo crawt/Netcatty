@@ -9,6 +9,7 @@ export interface ZmodemTransferState {
   total: number;
   fileIndex: number;
   fileCount: number;
+  finalizing: boolean;
   error: string | null;
 }
 
@@ -20,6 +21,7 @@ const initialState: ZmodemTransferState = {
   total: 0,
   fileIndex: 0,
   fileCount: 0,
+  finalizing: false,
   error: null,
 };
 
@@ -59,6 +61,7 @@ export function useZmodemTransfer(sessionId: string | null) {
             total: event.total ?? prev.total,
             fileIndex: event.fileIndex ?? prev.fileIndex,
             fileCount: event.fileCount ?? prev.fileCount,
+            finalizing: !!((event as Record<string, unknown>).finalizing),
           }));
           break;
         case 'complete':

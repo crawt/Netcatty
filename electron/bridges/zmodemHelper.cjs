@@ -588,6 +588,19 @@ async function handleUpload(zsession, opts) {
         if (opts.waitForDrain) await opts.waitForDrain();
         await yieldToIO();
       }
+      // All data written to Node.js buffer — but TCP may still be
+      // flushing to the remote.  Show "finalizing" state while we
+      // wait for the remote to acknowledge.
+      safeSend(contents, "netcatty:zmodem:progress", {
+        sessionId,
+        filename: name,
+        transferred: stat.size,
+        total: stat.size,
+        fileIndex: i,
+        fileCount: filePaths.length,
+        transferType: "upload",
+        finalizing: true,
+      });
       await withTimeout(xfer.end(), 120000);
     } finally {
       fs.closeSync(fd);

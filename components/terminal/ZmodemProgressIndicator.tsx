@@ -8,6 +8,7 @@ interface ZmodemProgressIndicatorProps {
   total: number;
   fileIndex: number;
   fileCount: number;
+  finalizing: boolean;
   onCancel: () => void;
 }
 
@@ -26,11 +27,12 @@ export const ZmodemProgressIndicator: React.FC<ZmodemProgressIndicatorProps> = (
   total,
   fileIndex,
   fileCount,
+  finalizing,
   onCancel,
 }) => {
   const percent = total > 0 ? Math.min(100, Math.round((transferred / total) * 100)) : 0;
   const Icon = transferType === 'upload' ? ArrowUpFromLine : ArrowDownToLine;
-  const label = transferType === 'upload' ? 'Uploading' : 'Downloading';
+  const label = finalizing ? 'Waiting for remote...' : transferType === 'upload' ? 'Uploading' : 'Downloading';
   const fileInfo = fileCount > 0 ? ` (${fileIndex + 1}/${fileCount})` : '';
 
   return (

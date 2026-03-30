@@ -275,6 +275,7 @@ declare global {
         total?: number;
         fileIndex?: number;
         fileCount?: number;
+        finalizing?: boolean;
         error?: string;
       }) => void
     ): () => void;

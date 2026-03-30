@@ -2082,6 +2082,7 @@ const TerminalComponent: React.FC<TerminalProps> = ({
                 total={zmodem.total}
                 fileIndex={zmodem.fileIndex}
                 fileCount={zmodem.fileCount}
+                finalizing={zmodem.finalizing}
                 onCancel={zmodem.cancel}
               />
             </div>
