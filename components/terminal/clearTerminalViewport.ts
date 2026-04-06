@@ -50,7 +50,32 @@ export const preserveTerminalViewportInScrollback = (term: XTerm): void => {
 };
 
 export const clearTerminalViewport = (term: XTerm): void => {
-  term.clear();
+  const buffer = term.buffer.active;
+  if (buffer.type !== "normal") return;
+
+  const cursorY = buffer.cursorY;
+  const cursorX = buffer.cursorX;
+
+  if (cursorY === 0 && buffer.baseY === 0) return;
+
+  const internal = term as InternalTerminal;
+  const scroll = internal._core?.scroll;
+  const eraseAttr = internal._core?._inputHandler?._eraseAttrData?.();
+
+  if (typeof scroll !== "function" || eraseAttr === undefined) return;
+
+  // Push lines above cursor into scrollback so they are preserved.
+  // After cursorY scrolls the prompt line shifts to active-screen row 0.
+  for (let i = 0; i < cursorY; i++) {
+    scroll.call(internal._core, eraseAttr, false);
+  }
+
+  // Clear everything below the prompt and reposition the cursor on it.
+  // CSI coordinates are 1-indexed.
+  const col = cursorX + 1;
+  term.write(`\x1b[2;1H\x1b[J\x1b[1;${col}H`, () => {
+    term.scrollToBottom();
+  });
 };
 
 export const isEraseScrollbackSequence = (params: CsiParam[]): boolean =>
