@@ -1,7 +1,5 @@
 import type { Terminal as XTerm } from "@xterm/xterm";
 
-const CLEAR_VIEWPORT_SEQUENCE = "\x1b[H\x1b[2J";
-
 type CsiParam = number | number[];
 type InternalTerminal = XTerm & {
   _core?: {
@@ -52,14 +50,7 @@ export const preserveTerminalViewportInScrollback = (term: XTerm): void => {
 };
 
 export const clearTerminalViewport = (term: XTerm): void => {
-  term.write(CLEAR_VIEWPORT_SEQUENCE, () => {
-    term.scrollToBottom();
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => {
-        term.scrollToBottom();
-      });
-    }
-  });
+  term.clear();
 };
 
 export const isEraseScrollbackSequence = (params: CsiParam[]): boolean =>
