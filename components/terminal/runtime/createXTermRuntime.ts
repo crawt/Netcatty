@@ -29,6 +29,12 @@ import {
 import { logger } from "../../../lib/logger";
 import { isMacPlatform, normalizeLineEndings, wrapBracketedPaste } from "../../../lib/utils";
 import { netcattyBridge } from "../../../infrastructure/services/netcattyBridge";
+import {
+  clearTerminalViewport,
+  isEraseViewportSequence,
+  isEraseScrollbackSequence,
+  preserveTerminalViewportInScrollback,
+} from "../clearTerminalViewport";
 import type {
   Host,
   KeyBinding,
@@ -458,7 +464,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
           break;
         }
         case "clearBuffer": {
-          term.clear();
+          clearTerminalViewport(term);
           break;
         }
         case "searchTerminal": {
@@ -591,6 +597,17 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
   // OSC 7 format: \x1b]7;file://hostname/path\x07 or \x1b]7;file://hostname/path\x1b\\
   let currentCwd: string | undefined = undefined;
 
+  const eraseScrollbackDisposable = term.parser.registerCsiHandler({ final: "J" }, (params) => {
+    if (isEraseViewportSequence(params)) {
+      preserveTerminalViewportInScrollback(term);
+      return false;
+    }
+    if (!isEraseScrollbackSequence(params)) {
+      return false;
+    }
+    return true;
+  });
+
   // Register OSC 7 handler using xterm.js parser
   // OSC 7 is the standard way for shells to report the current working directory
   const osc7Disposable = term.parser.registerOscHandler(7, (data) => {
@@ -713,6 +730,7 @@ export const createXTermRuntime = (ctx: CreateXTermRuntimeContext): XTermRuntime
     dispose: () => {
       cleanupMiddleClick?.();
       keywordHighlighter.dispose();
+      eraseScrollbackDisposable.dispose();
       osc7Disposable.dispose();
       osc52Disposable.dispose();
       try {
