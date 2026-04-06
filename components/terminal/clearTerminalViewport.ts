@@ -18,9 +18,9 @@ const getVisibleContentRowCount = (term: XTerm): number => {
     return 0;
   }
 
-  const viewportY = buffer.viewportY;
+  const baseY = buffer.baseY;
   for (let row = term.rows - 1; row >= 0; row--) {
-    const line = buffer.getLine(viewportY + row);
+    const line = buffer.getLine(baseY + row);
     if (!line) {
       continue;
     }
